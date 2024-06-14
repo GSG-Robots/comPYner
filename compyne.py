@@ -21,8 +21,10 @@ class Compyner:
         self.last_temp_import = None
 
     def load_module(self, name, parent=None):
-        if self.modules.get(name) is not None or name in self.exclude:
-            return name
+        if name.split(".", 1)[0] in self.exclude:
+            return True
+        if self.modules.get(name) is not None:
+            return False
 
         spec = importlib.util.find_spec(name, parent)
         if not spec:
@@ -31,12 +33,12 @@ class Compyner:
             warnings.warn(
                 f"Module {name} cannot be included: It is a built-in module. Excluded automatically, make sure it exists in the target environment."
             )
-            return name
+            return True
         if not spec.has_location:
             warnings.warn(
                 f"Module {name} cannot be included: It does not have a location. Excluded automatically, make sure it exists in the target environment."
             )
-            return name
+            return True
         print(f"Loading module {name} from {spec.origin}", file=sys.stderr)
         with open(spec.origin, "r", encoding="utf-8") as f:
             module_code = f.read()
@@ -46,70 +48,54 @@ class Compyner:
 
         self.modules[name] = self.replace_imports(module_code, spec.parent)
 
-        return name
+        return False
 
     def import_module(self, module, as_name=None, parent=None):
-        module = self.load_module(module, parent)
-        return f'{as_name or module} = __import__("{module}")\n'
+        is_builtin = self.load_module(module, parent)
+        if is_builtin:
+            return f'{as_name or module} = __import__("{module}", globals(), locals(), [""])'
+        return f'__comPYned_import_module("{module}", "{as_name or module}")'
 
-    def import_objects(self, module, objects, as_name=None, parent=None):
-        module = self.load_module(module, parent)
-        last_before = self.last_temp_import
-        self.last_temp_import = module
+    def import_object(self, module, object, as_name=None, parent=None):
+        is_builtin = self.load_module(module, parent)
+        if is_builtin:
+            return f'{as_name or object} = __import__("{module}", globals(), locals(), ["{object}"]).{object}'
         return (
-            (
-                self.import_module(
-                    module, parent=parent, as_name="__comPYned_TEMP_parent"
-                )
-                if module != last_before
-                else ""
-            )
-            + "\n".join(
-                [
-                    (f"{obj or as_name} = __comPYned_TEMP_parent.{obj}")
-                    for obj in objects
-                    if obj
-                ]
-            )
-            + "\n"
+            f'__comPYned_import_object("{module}", "{object}", "{as_name or object}")'
         )
 
-    def import_all(self, module, as_name=None, parent=None):
-        module = self.load_module(module, parent)
-        last_before = self.last_temp_import
-        self.last_temp_import = module
-        return (
-            (
-                self.import_module(
-                    module, parent=parent, as_name="__comPYned_TEMP_parent"
-                )
-                if module != last_before
-                else ""
-            )
-            + 'for __comPYned_TEMP_key in dir(__comPYned_TEMP_parent):\n    if __comPYned_TEMP_key == "__name__":\n        continue\n    globals()[__comPYned_TEMP_key] = getattr(__comPYned_TEMP_parent, __comPYned_TEMP_key)\n'
-        )
+    def import_all(self, module, parent=None):
+        is_builtin = self.load_module(module, parent)
+        if is_builtin:
+            return f'_a = __import__("{module}", globals(), locals(), [""]):print(_a)'
+        return f'__comPYned_import_all("{module}")'
 
     def replace_imports(self, code, parent=None):
         def replace_object_import(match):
             module = match.group(2)
-            return match.group(1) + self.import_objects(
-                module,
-                match.group(3)
-                .replace(" ", "")
-                .replace("\n", "")
-                .replace("\t", "")
-                .replace("\r", "")
-                .replace("(", "")
-                .replace("),", "")
-                .split(","),
-                match.group(4),
-                parent,
+            return match.group(1) + "\n".join(
+                [
+                    self.import_object(
+                        module,
+                        object,
+                        match.group(4),
+                        parent,
+                    )
+                    for object in match.group(3)
+                    .replace(" ", "")
+                    .replace("\n", "")
+                    .replace("\t", "")
+                    .replace("\r", "")
+                    .replace("(", "")
+                    .replace("),", "")
+                    .split(",")
+                ]
             )
 
         def replace_module_imports(match):
             module = match.group(2)
             return match.group(1) + self.import_module(module, match.group(3), parent)
-        
+
         def replace_all_imports(match):
             module = match.group(2)
             return match.group(1) + self.import_all(module, parent=parent)
@@ -166,16 +152,22 @@ __comPYned_finish_record()"""
         return self.module_data.keys()
 
 
-__comPYned_old_import = __import__
 __comPYned_modules = {{}}
 __comPYned_globals_tracker = {{}}
 __comPYned_import_as = None
 
 
-def __import__(name, *args, **kwargs):
-    if name in __comPYned_modules:
-        return __comPYned_modules[name]
-    return __comPYned_old_import(name, *args, **kwargs)
+def __comPYned_import_module(module, named):
+    globals()[named] = __comPYned_modules[module]
+
+def __comPYned_import_object(module, object, named):
+    globals()[named] = getattr(__comPYned_modules[module], object)
+    
+def __comPYned_import_all(module):
+    for key in dir(__comPYned_modules[module]):
+        if key == "__name__":
+            continue
+        globals()[key] = getattr(module, key)
 
 
 def __comPYned_start_record():
