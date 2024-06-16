@@ -40,7 +40,9 @@ It will automatically exclude all known standard library modules and add a comme
 python3 spike_prime_compyne.py <input_file> [<slot>] > <output_file>
 ```
 
-The `input_file` and `output_file` behave the same as mentioned for the `compyner.py` script. The slot is the slot number on the spike prime the program is supposed to be uploaded to. This is an optional argument and defaults to 0.
+The `input_file` and `output_file` behave the same as mentioned for the `compyner.py` script.
+
+The `slot` is the slot number on the spike prime the program is supposed to be uploaded to. This is an optional argument and defaults to 0.
 
 ## Known issues
 
