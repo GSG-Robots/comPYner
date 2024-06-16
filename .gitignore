@@ -1,7 +1,3 @@
 out.py
-testmodule.py
-testsubmodule.py
-testmodule-out.py
-othertest.py
-test0.py
-master.py
+module/*
+main.py
