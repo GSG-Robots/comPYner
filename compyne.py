@@ -229,6 +229,41 @@ class GlobalReplacer(ast.NodeTransformer):
                 )
             )
         )
+        if node.names[0].name == "*":
+            new_imports.append(
+                ast.copy_location(
+                    ast.For(
+                        target=ast.Name("__comPYned_sub", ast.Store()),
+                        iter=ast.Name("__comPYned_tmp", ast.Store()),
+                        body=[
+                            ast.copy_location(
+                                ast.Assign(
+                                    targets=[
+                                        ast.Subscript(
+                                            value=ast.Call(
+                                                ast.Name("globals", ast.Load()), [], []
+                                            ),
+                                            slice=ast.Name(
+                                                "__comPYned_sub", ast.Load()
+                                            ),
+                                            ctx=ast.Store(),
+                                        )
+                                    ],
+                                    value=ast.Subscript(
+                                        ast.Name("__comPYned_tmp", ast.Load()),
+                                        ast.Name("__comPYned_sub", ast.Load()),
+                                        ast.Load(),
+                                    )
+                                ),
+                                node,
+                            )
+                        ],
+                        orelse=[],
+                    ),
+                    node,
+                ),
+            )
+            return new_imports
         for alias in node.names:
             glob = self.check(alias.asname or alias.name, False)
             new_imports.append(
