@@ -6,14 +6,15 @@ We are aware that there are better ways to implement what we have done, but this
 
 ## Usage
 
+> [!WARNING]
+> This tool is not extensively tested and may not work as expected. Use at your own risk.
+> Feel free to open an issue if you encounter any problems.
+
 ```bash
-python3 compyner.py <input_module> <excludes> > <output_file>
+python3 compyner.py <input_file> <excludes> > <output_file>
 ```
 
-The `input_module` is the module name of the main file of your system. Note you cannot provide a path to the file, only the module name.
-
-If the file is in the working directory, a file `main.py` would be provided as `main`.
-If the file is in a subdirectory, a file `subdir/main.py` would be provided as `subdir.main`.
+The `input_file` is the path to the main file that you want to combine with all the files it imports. This can be a relative or absolute path.
 
 The excludes are the modules that are imported, but you do not want to include in the final file. This is a space separated list of module names.
 This is useful for excluding modules that are in the standard library, or are not needed in the final file.
@@ -36,10 +37,10 @@ This script is a wrapper around the `compyner.py` script that is designed to be 
 It will automatically exclude all known standard library modules and add a comment for the Spike Prime VSCode extension to upload the file to the spike prime.
 
 ```bash
-python3 spike_prime_compyne.py <input_module> [<slot>] > <output_file>
+python3 spike_prime_compyne.py <input_file> [<slot>] > <output_file>
 ```
 
-The `input_module` and `output_file` are the same as the `compyner.py` script. The slot is the slot number on the spike prime the program is supposed to be uploaded to. This is an optional argument and defaults to 0.
+The `input_file` and `output_file` behave the same as mentioned for the `compyner.py` script. The slot is the slot number on the spike prime the program is supposed to be uploaded to. This is an optional argument and defaults to 0.
 
 ## Known issues
 
