@@ -46,6 +46,7 @@ The `slot` is the slot number on the spike prime the program is supposed to be u
 
 ## Known issues
 
+- An import statement like `import a.b` does not work.
 - **FIXED**: `*`-Importing a module that is not excluded will not work. This is because we internally use variables to store the globals of each module, and something like `* = __comPYned_modules["test"]` ~~is not possible.~~ (`for name, value in __comPYned_modules["test"].items(): globals()[name] = value`)
 
 ## Authors
