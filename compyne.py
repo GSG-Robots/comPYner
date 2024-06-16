@@ -74,7 +74,7 @@ class GlobalFinder(ast.NodeVisitor):
         if self.explicit_only:
             return
         for alias in node.names:
-            self.add(alias.asname or alias.name)
+            self.add((alias.asname or alias.name).split(".")[0])
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
         if self.explicit_only:
@@ -92,6 +92,7 @@ class GlobalReplacer(ast.NodeTransformer):
         self.context = context or []
 
     def check(self, name, readonly):
+        name = name.split(".")[0]
         ctx = self.context.copy()
         while ctx and readonly:
             if (name, ctx) in self.globals:
@@ -100,12 +101,7 @@ class GlobalReplacer(ast.NodeTransformer):
         return (name, ctx) in self.globals
 
     def visit_Name(self, node):
-        print(
-            self.context,
-            node.id,
-            self.check(node.id, readonly=isinstance(node.ctx, ast.Load)),
-            file=sys.stderr,
-        )
+
         if self.check(node.id, readonly=isinstance(node.ctx, ast.Load)):
             return name_replacement(node.id, node, node.ctx)
         return node
@@ -156,9 +152,27 @@ class GlobalReplacer(ast.NodeTransformer):
     def visit_Import(self, node: ast.Import):
         new_imports = []
         for alias in node.names:
-            print(ast.dump(node), file=sys.stderr)
             replace_import = self.compyner.load_module(alias.name, self.parent)
             glob = self.check(alias.asname or alias.name, False)
+            parts = (alias.asname or alias.name).split(".")
+            for part in range(len(parts) - 1):
+                new_imports.append(
+                    ast.copy_location(
+                        ast.Assign(
+                            targets=[
+                                name_replacement(
+                                    ".".join(parts[: part + 1]), alias, ast.Store()
+                                )
+                            ],
+                            value=ast.Call(
+                                ast.Name(id="__comPYned_DotDict", ctx=ast.Load()),
+                                [],
+                                [],
+                            ),
+                        ),
+                        node,
+                    )
+                )
             if replace_import:
                 new_imports.append(
                     ast.copy_location(
@@ -216,6 +230,21 @@ class GlobalReplacer(ast.NodeTransformer):
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
         new_imports = []
+        if node.module is None:
+            return self.visit(
+                ast.copy_location(
+                    ast.Import(
+                        [
+                            ast.alias(
+                                name="." * node.level + alias.name,
+                                asname=alias.asname or alias.name,
+                            )
+                            for alias in node.names
+                        ]
+                    ),
+                    node,
+                )
+            )
         new_imports.append(
             self.visit_Import(
                 ast.copy_location(
@@ -302,7 +331,6 @@ class ComPYner:
         if name.split(".", 1)[0] in self.exclude:
             return False
 
-        print(name, parent, file=sys.stderr)
         spec = importlib.util.find_spec(name, parent)
         if not spec:
             raise ModuleNotFoundError(f"Module {name} not found")
@@ -320,7 +348,6 @@ class ComPYner:
             f"Loading module {name} as {spec.name} from {spec.origin}", file=sys.stderr
         )
 
-        print(spec.name, file=sys.stderr)
         if spec.name not in self.loaded_modules:
             self.add_module(spec.name, ast_from_file(Path(spec.origin)), spec.parent)
         self.loaded_modules.append(spec.name)
@@ -330,6 +357,7 @@ class ComPYner:
     def add_module(self, name: str, module: ast.Module, parent=None):
         gf = GlobalFinder()
         gf.visit(module)
+        print(f"Globals in {name}: {gf.globals}", file=sys.stderr)
         tree = GlobalReplacer(self, gf.globals, parent=parent).visit(module)
         self.result_module.body.append(
             ast.FunctionDef(
