@@ -109,7 +109,7 @@ class GlobalReplacer(ast.NodeTransformer):
         return node
 
     def visit_Global(self, node: ast.Global):
-        return None
+        return ast.Pass()
 
     def visit_FunctionDef(self, node):
         sub_replacer = GlobalReplacer(
@@ -209,30 +209,31 @@ class GlobalReplacer(ast.NodeTransformer):
                 )
             else:
                 new_imports.append(
-                    ast.copy_location(ast.Import([ast.alias(alias.name, "_")]), node)
+                    ast.copy_location(ast.Import([ast.alias(alias.name, "__comPYned_tmp")]), node)
                 )
-                new_imports.append(
-                    ast.copy_location(
-                        ast.Assign(
-                            [
-                                (
-                                    name_replacement(
-                                        alias.asname or alias.name, alias, ast.Store()
+                if alias.asname != "__comPYned_tmp":
+                    new_imports.append(
+                        ast.copy_location(
+                            ast.Assign(
+                                [
+                                    (
+                                        name_replacement(
+                                            alias.asname or alias.name, alias, ast.Store()
+                                        )
+                                        if glob
+                                        else ast.copy_location(
+                                            ast.Name(
+                                                alias.asname or alias.name, ast.Store()
+                                            ),
+                                            node,
+                                        )
                                     )
-                                    if glob
-                                    else ast.copy_location(
-                                        ast.Name(
-                                            alias.asname or alias.name, ast.Store()
-                                        ),
-                                        node,
-                                    )
-                                )
-                            ],
-                            ast.Name("_", ast.Load()),
-                        ),
-                        node,
+                                ],
+                                ast.Name("__comPYned_tmp", ast.Load()),
+                            ),
+                            node,
+                        )
                     )
-                )
         return new_imports
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
@@ -370,7 +371,9 @@ class ComPYner:
     def add_module(self, name: str, module: ast.Module, parent=None):
         gf = GlobalFinder()
         gf.visit(module)
-        print(f"Globals in {name}: {gf.globals}", file=sys.stderr)
+        print(f"Globals in {name}:", file=sys.stderr)
+        for glob, target in gf.globals:
+            print(f"  {'.'.join(target + [glob])}", file=sys.stderr)
         tree = GlobalReplacer(self, gf.globals, parent=parent).visit(module)
         fname = self.get_unique_name("module_" + name)
         self.result_module.body.append(
