@@ -1,8 +1,10 @@
 import ast
 import importlib.util
 from pathlib import Path
+import re
 import sys
 import warnings
+
 
 
 def name_replacement(
@@ -165,7 +167,7 @@ class GlobalReplacer(ast.NodeTransformer):
                                 )
                             ],
                             value=ast.Call(
-                                ast.Name(id="__comPYned_DotDict", ctx=ast.Load()),
+                                ast.Name(id="__comPYned_Module", ctx=ast.Load()),
                                 [],
                                 [],
                             ),
@@ -326,6 +328,12 @@ class ComPYner:
         self.exclude = exclude or []
         self.loaded_modules = []
         self.result_module = ast.Module([*START.body], [])
+        self.names = {}
+        
+    def get_unique_name(self, name: str):
+        name = re.sub(r"\W", "_", name)
+        self.names[name] = self.names.get(name, 0) + 1
+        return name + ("_" + str(self.names[name]) if self.names[name] > 1 else "")
 
     def load_module(self, name, parent=None):
         if name.split(".", 1)[0] in self.exclude:
@@ -359,9 +367,10 @@ class ComPYner:
         gf.visit(module)
         print(f"Globals in {name}: {gf.globals}", file=sys.stderr)
         tree = GlobalReplacer(self, gf.globals, parent=parent).visit(module)
+        fname = self.get_unique_name("module_" + name)
         self.result_module.body.append(
             ast.FunctionDef(
-                name="module",
+                name=fname,
                 args=ast.arguments(
                     args=[],
                     vararg=None,
@@ -375,7 +384,7 @@ class ComPYner:
                     ast.Assign(
                         targets=[ast.Name(id="__comPYned_SELF", ctx=ast.Store())],
                         value=ast.Call(
-                            func=ast.Name(id="__comPYned_DotDict", ctx=ast.Load()),
+                            func=ast.Name(id="__comPYned_Module", ctx=ast.Load()),
                             args=[],
                             keywords=[],
                         ),
@@ -426,7 +435,7 @@ class ComPYner:
                         ctx=ast.Store(),
                     )
                 ],
-                value=ast.Name(id="module", ctx=ast.Load()),
+                value=ast.Name(id=fname, ctx=ast.Load()),
                 lineno=0,
                 col_offset=0,
                 end_lineno=0,
