@@ -109,7 +109,7 @@ class GlobalReplacer(ast.NodeTransformer):
         return node
 
     def visit_Global(self, node: ast.Global):
-        return ast.Pass()
+        return None
 
     def visit_FunctionDef(self, node):
         sub_replacer = GlobalReplacer(
@@ -117,6 +117,9 @@ class GlobalReplacer(ast.NodeTransformer):
         )
         node.body = [sub_replacer.visit(n) for n in node.body]
         node.decorator_list = [self.visit(n) for n in node.decorator_list]
+        node.args = self.visit(node.args)
+        if node.returns is not None:
+            node.returns = self.visit(node.returns)
 
         if self.check(node.name, False):
             return [
@@ -137,6 +140,8 @@ class GlobalReplacer(ast.NodeTransformer):
             self.compyner, self.globals, self.parent, self.context + [node.name]
         )
         node.body = [sub_replacer.visit(n) for n in node.body]
+        node.bases = [self.visit(n) for n in node.bases]
+        
         if self.check(node.name, False):
             return [
                 node,
