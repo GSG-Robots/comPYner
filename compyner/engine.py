@@ -1,16 +1,16 @@
 import ast
 import importlib.util
+import os
 from pathlib import Path
 import re
 import sys
 import warnings
 
 
-
 def name_replacement(
     name: str, original_node: ast.AST, ctx: ast.expr_context
 ) -> ast.Attribute:
-    if name.startswith("__comPYned_"):
+    if name.startswith("__comPYned_") or name == "ComPYnerBuildTools":
         return ast.copy_location(ast.Name(id=name, ctx=ctx), original_node)
     attr = ast.Attribute(
         value=ast.Name(id="__comPYned_SELF", ctx=ast.Load()), attr=name, ctx=ctx
@@ -25,8 +25,57 @@ def ast_from_file(file_path: Path) -> ast.Module:
     return ast.parse(code)
 
 
-START = ast_from_file(Path("comPYned_snippets/start.py"))
-END = ast_from_file(Path("comPYned_snippets/end.py"))
+def path_from_module(module:  str) -> Path:
+    return Path(importlib.util.find_spec(module).origin)
+
+START = ast_from_file(path_from_module("compyner.snippets.start"))
+END = ast_from_file(path_from_module("compyner.snippets.end"))
+
+
+class ComPYnerBuildTools:
+    @staticmethod
+    def get_modules_path_glob(
+        replacer: "GlobalReplacer", node: ast.Call, /
+    ) -> list[ast.AST]:
+        args = [replacer.visit(arg) for arg in node.args]
+        if len(args) != 1:
+            raise ValueError("Import regex takes exaclty one argument")
+        if not isinstance(args[0], ast.Constant):
+            raise TypeError("The first argument of import_regex must be a constant")
+        glob = args[0].value
+        files = [file.absolute() for file in Path.cwd().glob(glob)]
+        names = [
+            file.with_suffix("").name
+            for file in files
+        ]
+        elts = []
+        for name, file in zip(names, files):
+            spec = importlib.util.spec_from_file_location(
+                file.with_suffix("").name, file
+            )
+            do = replacer.compyner._load_module(spec, spec.name)
+            if do is False:
+                raise ValueError(
+                    f"Could not import module {file.relative_to(Path.cwd())} using glob."
+                )
+            elts.append(
+                ast.copy_location(
+                    ast.Call(
+                        ast.Name(id="__comPYned_import", ctx=ast.Load()),
+                        [ast.Constant(name)],
+                        [],
+                    ),
+                    node,
+                )
+            )
+
+        return ast.copy_location(
+            ast.List(
+                elts=elts,
+                ctx=ast.Load(),
+            ),
+            node,
+        )
 
 
 class GlobalFinder(ast.NodeVisitor):
@@ -86,7 +135,13 @@ class GlobalFinder(ast.NodeVisitor):
 
 
 class GlobalReplacer(ast.NodeTransformer):
-    def __init__(self, compyner: "ComPYner", globals, parent=None, context=None):
+    def __init__(
+        self,
+        compyner: "ComPYner",
+        globals,
+        parent: "GlobalReplacer" = None,
+        context=None,
+    ):
         super().__init__()
         self.globals = globals
         self.compyner = compyner
@@ -141,7 +196,7 @@ class GlobalReplacer(ast.NodeTransformer):
         )
         node.body = [sub_replacer.visit(n) for n in node.body]
         node.bases = [self.visit(n) for n in node.bases]
-        
+
         if self.check(node.name, False):
             return [
                 node,
@@ -209,7 +264,9 @@ class GlobalReplacer(ast.NodeTransformer):
                 )
             else:
                 new_imports.append(
-                    ast.copy_location(ast.Import([ast.alias(alias.name, "__comPYned_tmp")]), node)
+                    ast.copy_location(
+                        ast.Import([ast.alias(alias.name, "__comPYned_tmp")]), node
+                    )
                 )
                 if alias.asname != "__comPYned_tmp":
                     new_imports.append(
@@ -218,7 +275,9 @@ class GlobalReplacer(ast.NodeTransformer):
                                 [
                                     (
                                         name_replacement(
-                                            alias.asname or alias.name, alias, ast.Store()
+                                            alias.asname or alias.name,
+                                            alias,
+                                            ast.Store(),
                                         )
                                         if glob
                                         else ast.copy_location(
@@ -236,7 +295,23 @@ class GlobalReplacer(ast.NodeTransformer):
                     )
         return new_imports
 
+    def visit_Call(self, node: ast.Call):
+        node.args = [self.visit(arg) for arg in node.args]
+        node.keywords = [self.visit(kwarg) for kwarg in node.keywords]
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "ComPYnerBuildTools"
+        ):
+            return getattr(ComPYnerBuildTools, node.func.attr)(self, node)
+
+        node.func = self.visit(node.func)
+
+        return node
+
     def visit_ImportFrom(self, node: ast.ImportFrom):
+        if node.module == "compyner.typehints":
+            return ast.Pass()
         new_imports = []
         if node.module is None:
             return self.visit(
@@ -335,7 +410,7 @@ class ComPYner:
         self.loaded_modules = []
         self.result_module = ast.Module([*START.body], [])
         self.names = {}
-        
+
     def get_unique_name(self, name: str):
         name = re.sub(r"\W", "_", name)
         self.names[name] = self.names.get(name, 0) + 1
@@ -346,6 +421,9 @@ class ComPYner:
             return False
 
         spec = importlib.util.find_spec(name, parent)
+        return self._load_module(spec, name)
+
+    def _load_module(self, spec, name=None):
         if not spec:
             raise ModuleNotFoundError(f"Module {name} not found")
         if spec.origin == "built-in":
@@ -374,8 +452,10 @@ class ComPYner:
         print(f"Globals in {name}:", file=sys.stderr)
         for glob, target in gf.globals:
             print(f"  {'.'.join(target + [glob])}", file=sys.stderr)
+        if not gf.globals:
+            print("   (none)")
         tree = GlobalReplacer(self, gf.globals, parent=parent).visit(module)
-        fname = self.get_unique_name("module_" + name)
+        fname = self.get_unique_name("main" if name == "__main__" else "module_" + name)
         self.result_module.body.append(
             ast.FunctionDef(
                 name=fname,
@@ -455,17 +535,3 @@ class ComPYner:
         self.result_module.body.extend(END.body)
         return ast.unparse(self.result_module)
 
-
-def compyne(path, exclude=None):
-    compyner = ComPYner(exclude)
-    compyner.add_module("__main__", ast_from_file(Path(path)))
-    return compyner.compyne()
-
-
-if __name__ == "__main__":
-    print(
-        compyne(
-            sys.argv[1],
-            exclude=sys.argv[2:],
-        )
-    )
