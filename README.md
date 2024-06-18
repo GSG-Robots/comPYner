@@ -1,8 +1,15 @@
 # compyner
 
-This is a tool to combine the main file and any imported files into a single file.
+ComPYner is a small tool to bundle a python file and all its imports into a single file.
 This was created due to the limitations of the micropython implementation on the spike prime, where there is no filesystem to store multiple files.
 We are aware that there are better ways to implement what we have done, but this is the least ugly code that will run on spike primes micropython.
+
+## Installation
+
+Install `compyner` with pip, or another tool using PyPI:
+```bash
+pip install compyner
+```
 
 ## Usage
 
@@ -11,22 +18,24 @@ We are aware that there are better ways to implement what we have done, but this
 > Feel free to open an issue if you encounter any problems.
 
 ```bash
-python3 compyner.py <input_file> <excludes> > <output_file>
+compyner <input> -o <output>
 ```
 
-The `input_file` is the path to the main file that you want to combine with all the files it imports. This can be a relative or absolute path.
+This command will read the file at `<input>`, "compyne" it and writes the result to `<output>`
 
-The excludes are the modules that are imported, but you do not want to include in the final file. This is a space separated list of module names.
-This is useful for excluding modules that are in the standard library, or are not needed in the final file.
+If the `-o/--output` argument is not used, the result will be printed to `stdout`.
+If you want to read from `stdin`, you can do this by omitting the `input` argument and using the `--stdin` flag.
 
-The program will skip imports from builtins and some from the standard library automatically, but by providing this it gets a lot safer.
+If any modules are imported that are in the standard library, these need to be excluded.
+Normally, the script detects these imports and excludes them automatically, but this does not work for some, like the `collections` module.
+Also, modules that are only availible in the standard library of the target environment should be excluded.
 
-The `output_file` is the filepath to the output file. This can be a relative or absolute path.
+Modules that should be excluded should be passed as a space-seperated list to the `--exclude` argument.
 
-## Example
+### Example
 
 ```bash
-python3 compyner.py main math > output.py
+compyner main.py --exclude math -o output.py
 ```
 
 This will combine the file `main.py` with all the files it imports, except for `math`, and output the result to `output.py`.
