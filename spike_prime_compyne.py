@@ -1,5 +1,6 @@
+from pathlib import Path
 import sys
-from compyne import compyne
+from compyner.engine import ComPYner, ast_from_file
 
 
 SPIKE_PRIME_MODULES = [
@@ -56,9 +57,9 @@ SPIKE_PRIME_MODULES = [
 
 
 def spike_prime_compyne(input_module, slot=0):
-    return f"# LEGO type:standard slot:{slot} autostart\n" + compyne(
-        input_module, SPIKE_PRIME_MODULES
-    )
+    compyner = ComPYner(SPIKE_PRIME_MODULES)
+    compyner.add_module("__main__", ast_from_file(Path(input_module)))
+    return f"# LEGO type:standard slot:{slot} autostart\n" + compyner.compyne()
 
 
 if __name__ == "__main__":
