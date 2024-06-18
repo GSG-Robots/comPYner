@@ -453,7 +453,7 @@ class ComPYner:
         for glob, target in gf.globals:
             print(f"  {'.'.join(target + [glob])}", file=sys.stderr)
         if not gf.globals:
-            print("   (none)")
+            print("   (none)", file=sys.stderr)
         tree = GlobalReplacer(self, gf.globals, parent=parent).visit(module)
         fname = self.get_unique_name("main" if name == "__main__" else "module_" + name)
         self.result_module.body.append(
