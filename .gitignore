@@ -2,3 +2,8 @@ out.py
 module/*
 main.py
 master.py
+*.pyc
+test.py
+run_1.py
+run_2.py
+dist
