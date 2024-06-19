@@ -20,7 +20,7 @@ def name_replacement(
 
 
 def ast_from_file(file_path: Path) -> ast.Module:
-    with file_path.open() as f:
+    with file_path.open(encoding="utf-8") as f:
         code = f.read()
     return ast.parse(code)
 
