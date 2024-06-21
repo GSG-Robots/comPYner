@@ -3,7 +3,7 @@ import time
 
 try:
     from inspect import isgeneratorfunction, isgenerator
-except ModuleNotFoundError:
+except ImportError:
     type_GeneratorFunction = type((lambda: (yield)))  # Generator function
     type_GeneratorObject = type((lambda: (yield))())  # Generator type
     def isgeneratorfunction(func):
@@ -12,6 +12,11 @@ except ModuleNotFoundError:
         return isinstance(func, type_GeneratorObject)
 
 class ChangeStateContext:
+    """
+    Context manager for changing the state of the program.
+    This is used to change the state of the program to building or running, and then back to idle when the context is exited.
+    """
+    
     def __init__(self, state: "State", building_queue: "Queue", running_queue: "Queue"):
         self.state = state
         self.new_building_queue = building_queue
@@ -31,6 +36,10 @@ class ChangeStateContext:
 
 
 class State:
+    """
+    The program state.
+    This is used to keep track of whether the program is building a queue, running a queue, or idle.
+    """
     building_queue: "Queue" = None
     running_queue: "Queue" = None
 
@@ -65,53 +74,88 @@ class State:
 
 
 class Conditions:
+    """
+    A collection of conditions that can be used with wait_until.
+    """
     @classmethod
     def time_is(cls, until):
+        """
+        Returns a condition that is met when the current time is equal to or greater than `until`.
+        """
         return lambda: time.time() >= until
 
     @classmethod
     def time_passed(cls, n):
+        """
+        Returns a condition that is met when `n` seconds have passed.
+        """
         return cls.time_is(time.time() + n)
-
+op = print
 
 def queueable(func):
+    """
+    Make a function queueable. If the function is called while a queue is being built, it will be added to the queue. Otherwise, it will behave as normal.
+    """
     def wrapper(*args, **kwargs):
         nonlocal func
-        if isgeneratorfunction(func):
-            func = func(*args, **kwargs)
         if STATE.is_building:
-            return STATE.queue.add(func, *args, **kwargs)
+            return STATE.queue.add(func, args, kwargs)
         return func(*args, **kwargs)
 
     return wrapper
 
-
 def queue(func):
-    queue_ = Queue()
+    """
+    Create a queue from a function. All actions in the function should be queueable. If they are not, they will be executed immediately.
+    """
+    queue_ = Queue(func.__name__)
     with STATE.building(queue_):
         func()
     return queue_
 
+def queuew(func):
+    """
+    Works similarly to queue, but wraps the queue in a QueueWrapper.
+    This will act the same as a Queue, but the initialisation of the queue will be delayed until its first use.
+    """
+    return QueueWrapper(func)
 
+@queueable
 def wait_until(check):
+    """
+    Yield/wait until a condition is met.
+    """
     while not check():
         yield
 
 
 class Queue:
-    def __init__(self):
+    def __init__(self, name=None):
+        self.name = name
         self.queue = []
-        # self.start = queueable(self.start)
 
-    def add(self, func, *args, **kwargs):
+    def add(self, func, args, kwargs):
         self.queue.append((func, args, kwargs))
 
+    @queueable
     def start(self):
         global QUEUE_MANAGER
         QUEUE_MANAGER.add(self)
+        
+    @queueable
+    def stop(self):
+        global QUEUE_MANAGER
+        QUEUE_MANAGER.remove(self)
 
+    @queueable
     def next(self):
         func, args, kwargs = self.queue[0]
+        if isgeneratorfunction(func):
+            with STATE.running(self):
+                func = func(*args, **kwargs)
+            args = ()
+            kwargs = {}
+            self.queue[0] = (func, args, kwargs)
         if isgenerator(func):
             try:
                 with STATE.running(self):
@@ -122,7 +166,30 @@ class Queue:
             with STATE.running(self):
                 func(*args, **kwargs)
             self.queue.pop(0)
+            
 
+class QueueWrapper:
+    def __init__(self, func):
+        self._queue = None
+        self.func = func
+        
+    @property
+    def _sub_queue(self):
+        if self._queue is None:
+            self._queue = queue(self.func)
+        return self._queue
+    
+    @queueable
+    def next(self):
+        self._sub_queue.next()
+        
+    @queueable
+    def start(self):
+        self._sub_queue.start()
+        
+    @queueable
+    def stop(self):
+        self._sub_queue.stop()
 
 class QueueManager:
     def __init__(self) -> None:
@@ -139,7 +206,10 @@ class QueueManager:
             raise TypeError("'queue' must be a callable or Queue")
         self.queues.append(queue_)
 
-    # TODO: remove
+    def remove(self, queue_):
+        if not isinstance(queue_, Queue):
+            raise TypeError("'queue' must be a Queue")
+        self.queues.remove(queue_)
 
     def tick_all(self):
         for queue_ in self.queues:
@@ -160,32 +230,29 @@ QueueManager()
 
 @queueable
 def sleep(n):
+    """
+    Shortcut for waiting for a certain amount of time. (in seconds)
+    """
     yield from wait_until(Conditions.time_passed(n))
 
 
 print = queueable(print)
 
 
-@queueable
-def start_queue(queue_):
-    queue_.start()
-
-
-@queue
+@queuew
 def main2():
     print("b1")
     sleep(1)
     print("b2")
 
-
-@queue
+@queuew
 def main():
     print("a1")
     sleep(1)
-    start_queue(main2)
+    main2.start()
     print("a2")
 
-
+# op(main.queue)
 main.start()
 
 QUEUE_MANAGER.run_until_complete()
