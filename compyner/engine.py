@@ -405,11 +405,12 @@ class GlobalReplacer(ast.NodeTransformer):
 
 
 class ComPYner:
-    def __init__(self, exclude=None):
+    def __init__(self, exclude=None, module_preprocessor=None):
         self.exclude = exclude or []
         self.loaded_modules = []
         self.result_module = ast.Module([*START.body], [])
         self.names = {}
+        self.module_preprocessor = module_preprocessor or (lambda x: x)
 
     def get_unique_name(self, name: str):
         name = re.sub(r"\W", "_", name)
@@ -447,6 +448,7 @@ class ComPYner:
         return spec.name
 
     def add_module(self, name: str, module: ast.Module, parent=None):
+        module = self.module_preprocessor(module)
         gf = GlobalFinder()
         gf.visit(module)
         print(f"Globals in {name}:", file=sys.stderr)
@@ -534,4 +536,3 @@ class ComPYner:
     def compyne(self):
         self.result_module.body.extend(END.body)
         return ast.unparse(self.result_module)
-
