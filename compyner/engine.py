@@ -172,7 +172,7 @@ class GlobalReplacer(ast.NodeTransformer):
         )
         node.body = [sub_replacer.visit(n) for n in node.body]
         node.decorator_list = [self.visit(n) for n in node.decorator_list]
-        node.args = self.visit(node.args)
+        node.args = self.visit(node.args) if node.args else None
         if node.returns is not None:
             node.returns = self.visit(node.returns)
 
