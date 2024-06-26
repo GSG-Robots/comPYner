@@ -442,13 +442,13 @@ class ComPYner:
         )
 
         if spec.name not in self.loaded_modules:
-            self.add_module(spec.name, ast_from_file(Path(spec.origin)), spec.parent)
+            self.add_module(spec.name, ast_from_file(Path(spec.origin)), spec.parent, origin=spec.origin)
         self.loaded_modules.append(spec.name)
 
         return spec.name
 
-    def add_module(self, name: str, module: ast.Module, parent=None):
-        module = self.module_preprocessor(module)
+    def add_module(self, name: str, module: ast.Module, parent=None, origin=None):
+        module = self.module_preprocessor(module, origin or name)
         gf = GlobalFinder()
         gf.visit(module)
         print(f"Globals in {name}:", file=sys.stderr)
