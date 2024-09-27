@@ -456,9 +456,9 @@ class ComPYner:
         self.module_preprocessor = module_preprocessor or (lambda x, y: x)
         self.namer = Namer()
         self.static = "_comPYned"
-        self.tmp = self.namer.get_unique_name("tmp")
-        self.tmp_sub = self.namer.get_unique_name("tmp")
-        self.tmp_self = self.namer.get_unique_name("tmp")
+        self.tmp = self.namer.get_unique_name("_comPYned_tmp")
+        self.tmp_sub = self.namer.get_unique_name("_comPYned_tmp")
+        self.tmp_self = self.namer.get_unique_name("_comPYned_tmp")
 
     def load_module(self, name, parent=None):
         if name.split(".", 1)[0] in self.exclude:
