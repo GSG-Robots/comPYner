@@ -22,10 +22,7 @@ class _comPYned:
         if module not in self.modules:
             raise ImportError("Module %s not found" % module)
         if module not in self.executed_modules:
-            try:
-                self.executed_modules[module] = self.modules[module]()
-            except Exception as e:
-                raise ImportError("Error loading module %s" % module) from e
+            self.executed_modules[module] = self.modules[module]()
         return self.executed_modules[module]
 
 
