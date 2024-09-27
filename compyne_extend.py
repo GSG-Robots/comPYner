@@ -245,10 +245,10 @@ def preprocess_ast(input_ast: ast.Module, filepath: str) -> ast.Module:
 
 
 def custom_expanded_compyne(input_ast):
-    # compyner = ComPYner(module_preprocessor=preprocess_ast)
-    # compyner.add_module("__main__", input_ast)
-    # return compyner.compyne()
-    return ast.unparse(preprocess_ast(input_ast, "test.py")[0])
+    compyner = ComPYner(module_preprocessor=preprocess_ast)
+    compyner.add_module("__main__", input_ast)
+    return compyner.compyne()
+    # return ast.unparse(preprocess_ast(input_ast, "test.py")[0])
 
 
 def main():
