@@ -505,7 +505,7 @@ class ComPYner:
         if not gf.globals:
             print("   (none)", file=sys.stderr)
         tree = GlobalReplacer(self, gf.globals, parent=parent).visit(module)
-        fname = self.get_unique_name("main" if name == "__main__" else "module_" + name)
+        fname = self.namer.get_unique_name("main" if name == "__main__" else "module_" + name)
         self.result_module.body.append(
             ast.FunctionDef(
                 name=fname,
