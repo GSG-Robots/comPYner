@@ -463,6 +463,13 @@ class ComPYner:
     def load_module(self, name, parent=None):
         if name.split(".", 1)[0] in self.exclude:
             return False
+        
+        try:
+            special_spec = importlib.util.find_spec("compyned_polyfills." + name)
+            if special_spec:
+                return self._load_module(special_spec, name)
+        except ModuleNotFoundError:
+            pass
 
         spec = importlib.util.find_spec(name, parent)
         return self._load_module(spec, name)
