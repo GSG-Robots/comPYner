@@ -236,7 +236,10 @@ def sleep(n):
     yield from wait_until(Conditions.time_passed(n))
 
 
-print = queueable(print)
+op = print
+@queueable
+def print(*args, **kwargs):
+    op(*args, **kwargs)
 
 
 @queuew
@@ -252,7 +255,6 @@ def main():
     main2.start()
     print("a2")
 
-# op(main.queue)
 main.start()
 
 QUEUE_MANAGER.run_until_complete()

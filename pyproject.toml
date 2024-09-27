@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "compyner"
-version = "0.0.2"
+version = "0.1.3"
 description = "A small tool to bundle a python file and all its imports into a single file."
 authors = ["GSG Robots <gsgrobots@gmail.com>"]
 readme = "README.md"
