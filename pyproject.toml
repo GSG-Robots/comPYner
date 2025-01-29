@@ -9,6 +9,7 @@ repository = "https://github.com/GSG-Robots/compyner"
 
 [tool.poetry.dependencies]
 python = "^3.9"
+ast-comments = "^1.2.2"
 
 
 [build-system]
