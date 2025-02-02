@@ -15,7 +15,6 @@ def main():
     
     parser.add_argument("--exclude", required=False, action="store", type=str, default=None, nargs='+')
     parser.add_argument("--split-modules", required=False, action="store_true", default=False)
-    parser.add_argument("--no-attrs", required=False, action="store_true", default=False)
     args = parser.parse_args()
     
     module_ast = ast.parse(args.input.read())
@@ -25,9 +24,8 @@ def main():
         debug_stack=False,
         debug_line=False,
         split_modules=args.split_modules,
-        use_attr=not args.no_attrs,
         require_dunder_name=True,)
-    compyner.add_module("__main__", module_ast)
+    compyner.add_module(args.input.name.rsplit(".", 1)[0] or "__main__", module_ast)
     
     args.output.write(compyner.compyne())
 

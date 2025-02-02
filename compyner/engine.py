@@ -1,14 +1,15 @@
+from collections import defaultdict
 import ast_comments as ast
 import importlib.util
 from pathlib import Path
 import re
 import sys
-import warnings
+import logging
 import random
 import string
 
 
-class CustomUnparser(ast._Unparser):
+class NoneFriendlyUnparser(ast._Unparser):
     def generic_visit(self, node):
         if node is None:
             return
@@ -16,22 +17,15 @@ class CustomUnparser(ast._Unparser):
 
 
 def name_replacement(
-    gr: "GlobalReplacer", name: str, original_node: ast.AST, ctx: ast.expr_context
+    gr: "TransformGlobals", name: str, original_node: ast.AST, ctx: ast.expr_context
 ) -> ast.Attribute:
     if name == gr.compyner.static or name == "ComPYnerBuildTools":
         return ast.copy_location(ast.Name(id=name, ctx=ctx), original_node)
-    if gr.compyner.use_attr:
-        attr = ast.Attribute(
-            value=ast.Name(gr.tmp_self, ast.Load()),
-            attr=name,
-            ctx=ctx,
-        )
-    else:
-        attr = ast.Subscript(
-            value=ast.Name(gr.tmp_self, ast.Load()),
-            slice=ast.Index(ast.Constant(s=name)),
-            ctx=ctx,
-        )
+    attr = ast.Attribute(
+        value=ast.Name(gr.tmp_self, ast.Load()),
+        attr=name,
+        ctx=ctx,
+    )
     attr = ast.copy_location(attr, original_node)
     return attr
 
@@ -46,17 +40,13 @@ def path_from_module(module: str) -> Path:
     return Path(importlib.util.find_spec(module).origin)
 
 
-INTERNALS = ast_from_file(path_from_module("compyner.snippets.internals"))
-INTERNALS_USE_ATTR = ast_from_file(
-    path_from_module("compyner.snippets.internals_use_attr")
-)
-END = ast_from_file(path_from_module("compyner.snippets.end"))
+MODULE_CLASS_BODY = ast_from_file(path_from_module("compyner.snippets.module"))
 
 
 class ComPYnerBuildTools:
     @staticmethod
     def get_modules_path_glob(
-        replacer: "GlobalReplacer", node: ast.Call, /
+        replacer: "TransformGlobals", node: ast.Call, /
     ) -> list[ast.AST]:
 
         args = [replacer.visit(arg) for arg in node.args]
@@ -82,19 +72,7 @@ class ComPYnerBuildTools:
                 )
             elts.append(
                 ast.copy_location(
-                    (
-                        ast.Name(replacer.compyner.names_for_modules[name])
-                        if replacer.compyner.use_attr
-                        else ast.Call(
-                            ast.Attribute(
-                                ast.Name(replacer.compyner.static, ast.Load()),
-                                "get",
-                                ast.Load(),
-                            ),
-                            [ast.Constant(name)],
-                            [],
-                        )
-                    ),
+                    (ast.Name(replacer.compyner.names_for_modules[name])),
                     node,
                 )
             )
@@ -108,7 +86,7 @@ class ComPYnerBuildTools:
         )
 
 
-class GlobalFinder(ast.NodeVisitor):
+class DiscoverGlobals(ast.NodeVisitor):
     def __init__(self, explicit_only=False, context=None):
         super().__init__()
         self.globals = []
@@ -143,7 +121,7 @@ class GlobalFinder(ast.NodeVisitor):
     def visit_FunctionDef(self, node):
         if not self.explicit_only:
             self.add(node.name)
-        global_finder = GlobalFinder(
+        global_finder = DiscoverGlobals(
             explicit_only=True, context=self.context + [node.name]
         )
         if global_finder.has_dunder_name:
@@ -157,7 +135,7 @@ class GlobalFinder(ast.NodeVisitor):
     def visit_ClassDef(self, node):
         if not self.explicit_only:
             self.add(node.name)
-        global_finder = GlobalFinder(
+        global_finder = DiscoverGlobals(
             explicit_only=True, context=self.context + [node.name]
         )
         if global_finder.has_dunder_name:
@@ -179,15 +157,14 @@ class GlobalFinder(ast.NodeVisitor):
             self.add(alias.asname or alias.name)
 
 
-class GlobalReplacer(ast.NodeTransformer):
+class TransformGlobals(ast.NodeTransformer):
     def __init__(
         self,
         compyner: "ComPYner",
         globals_,
-        parent: "GlobalReplacer" = None,
+        parent: "TransformGlobals" = None,
         context=None,
         tmp_self=None,
-        do_position_map=True,
     ):
         super().__init__()
         self.globals = globals_
@@ -195,11 +172,8 @@ class GlobalReplacer(ast.NodeTransformer):
         self.parent = parent
         self.context = context or []
         self.tmp_self = tmp_self or "_comPYned_SELF"
-        self.do_position_map = do_position_map
 
     def set_line(self, line):
-        # if not self.do_position_map:
-        #     return ast.Pass()
         return self.compyner.set_line(line)
 
     def check(self, name, readonly):
@@ -228,69 +202,40 @@ class GlobalReplacer(ast.NodeTransformer):
         ]
 
     def visit_FunctionDef(self, node):
-        # arg_names = [arg.arg for arg in node.args.args + node.args.kwonlyargs + node.args.posonlyargs] + [node.args.kwarg, node.args.vararg]
-        # for subnode in ast.walk(node):
-        #     if isinstance(subnode, ast.Global):
-        #         for name in subnode.names:
-        #             arg_names.remove(name)
-        # NOT NEEDED I THINK
-        sub_replacer = GlobalReplacer(
+        sub_replacer = TransformGlobals(
             self.compyner,
             self.globals,
             self.parent,
             self.context + [node.name],
             self.tmp_self,
-            node.name not in ("__exit__", "__del__"),
         )
+        original_name = node.name
+        node.name = self.compyner.namer.get_unique_name("func_" + original_name)
         node.body = [sub_replacer.visit(n) for n in node.body]
-        node.body = [
-            *node.body,
-        ]
-        old_use_attr = self.compyner.use_attr
-        self.compyner.use_attr = True
         node.decorator_list = [self.visit(n) for n in node.decorator_list]
-        self.compyner.use_attr = old_use_attr
-        # node.decorator_list += [
-        #     ast.Call(
-        #         ast.Attribute(ast.Name(self.compyner.static), "has_stack"),
-        #         [
-        #             ast.Name(self.compyner.stack_var),
-        #             ast.List(
-        #                 [
-        #                     ast.Constant(node.name),
-        #                     ast.Name(self.compyner.current_file, ast.Load()),
-        #                     ast.Constant(node.lineno),
-        #                 ],
-        #             ),
-        #         ],
-        #         [],
-        #     )
-        # ]
-        # self.use_attr = False
         node.args = self.visit(node.args) if node.args else None
-        # for arg in node.args.args + node.args.kwarg + node.args.kwonlyargs + node.args.:
 
         if node.returns is not None:
             node.returns = self.visit(node.returns)
 
-        if self.check(node.name, False):
+        if self.check(original_name, False):
             return [
                 self.set_line(node.lineno),
                 node,
                 ast.copy_location(
                     ast.Assign(
-                        targets=[name_replacement(self, node.name, node, ast.Store())],
+                        targets=[name_replacement(self, original_name, node, ast.Store())],
                         value=ast.Name(id=node.name, ctx=ast.Load()),
                     ),
                     node,
                 ),
                 # TODO
-                # ast.copy_location(
-                #     ast.Delete(
-                #         [ast.Name(id=node.name, ctx=ast.Del())],
-                #     ),
-                #     node,
-                # ),
+                ast.copy_location(
+                    ast.Delete(
+                        [ast.Name(id=node.name, ctx=ast.Del())],
+                    ),
+                    node,
+                ),
             ]
         else:
             return [
@@ -299,7 +244,7 @@ class GlobalReplacer(ast.NodeTransformer):
             ]
 
     def visit_ClassDef(self, node: ast.ClassDef):
-        sub_replacer = GlobalReplacer(
+        sub_replacer = TransformGlobals(
             self.compyner,
             self.globals,
             self.parent,
@@ -308,25 +253,27 @@ class GlobalReplacer(ast.NodeTransformer):
         )
         node.body = [sub_replacer.visit(n) for n in node.body]
         node.bases = [self.visit(n) for n in node.bases]
+        original_name = node.name
+        node.name = self.compyner.namer.get_unique_name("class_" + original_name)
 
-        if self.check(node.name, False):
+        if self.check(original_name, False):
             return [
                 self.set_line(node.lineno),
                 node,
                 ast.copy_location(
                     ast.Assign(
-                        targets=[name_replacement(self, node.name, node, ast.Store())],
+                        targets=[name_replacement(self, original_name, node, ast.Store())],
                         value=ast.Name(id=node.name, ctx=ast.Load()),
                     ),
                     node,
                 ),
                 # TODO
-                # ast.copy_location(
-                #     ast.Delete(
-                #         [ast.Name(id=node.name, ctx=ast.Del())],
-                #     ),
-                #     node,
-                # ),
+                ast.copy_location(
+                    ast.Delete(
+                        [ast.Name(id=node.name, ctx=ast.Del())],
+                    ),
+                    node,
+                ),
             ]
         else:
             return [
@@ -338,13 +285,10 @@ class GlobalReplacer(ast.NodeTransformer):
         new_imports = []
         for alias in node.names:
             replace_import = self.compyner.load_module(alias.name, self.parent)
-            if self.compyner.use_attr:
-                tmp_name = (
-                    self.compyner.names_for_modules.get(alias.name)
-                    or self.compyner.namer.get_unique_name()
-                )
-            else:
-                tmp_name = self.compyner.namer.get_unique_name()
+            tmp_name = (
+                self.compyner.names_for_modules.get(alias.name)
+                or self.compyner.namer.get_unique_name("import_" + (alias.asname or alias.name))
+            )
             glob = self.check(alias.asname or alias.name, False)
             parts = (alias.asname or alias.name).split(".")
             for part in range(len(parts) - 1):
@@ -360,15 +304,7 @@ class GlobalReplacer(ast.NodeTransformer):
                                 )
                             ],
                             value=ast.Call(
-                                (
-                                    ast.Name(self.compyner.static, ast.Load())
-                                    if self.compyner.use_attr
-                                    else ast.Attribute(
-                                        ast.Name(self.compyner.static, ast.Load()),
-                                        "Module",
-                                        ast.Load(),
-                                    )
-                                ),
+                                (ast.Name(self.compyner.static, ast.Load())),
                                 [],
                                 [],
                             ),
@@ -398,17 +334,7 @@ class GlobalReplacer(ast.NodeTransformer):
                                 )
                             ],
                             value=(
-                                ast.Call(
-                                    ast.Attribute(
-                                        ast.Name(self.compyner.static, ast.Load()),
-                                        "get",
-                                        ast.Load(),
-                                    ),
-                                    [ast.Constant(replace_import)],
-                                    [],
-                                )
-                                if not self.compyner.use_attr
-                                else ast.Name(
+                                ast.Name(
                                     self.compyner.names_for_modules[replace_import]
                                 )
                             ),
@@ -468,11 +394,9 @@ class GlobalReplacer(ast.NodeTransformer):
         return node
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
-        tmp_name = self.compyner.namer.get_unique_name()
-        tmp_sub_name = self.compyner.namer.get_unique_name()
         if node.module == "compyner.typehints":
             return ast.Pass()
-        new_imports = []
+        
         if node.module is None:
             return self.visit(
                 ast.copy_location(
@@ -488,51 +412,25 @@ class GlobalReplacer(ast.NodeTransformer):
                     node,
                 )
             )
+        
+        if node.names[0].name == "*":
+            raise ValueError("Star imports are not supported, found at " + self.compyner.current_file + ":" + str(node.lineno))
+        
+        new_imports = []
+        tmp_module = self.compyner.namer.get_unique_name("import_" + node.module)
         new_imports.append(
             self.visit_Import(
                 ast.copy_location(
                     ast.Import(
                         [
-                            ast.alias("." * node.level + node.module, tmp_name),
+                            ast.alias("." * node.level + node.module, tmp_module),
                         ],
                     ),
                     node,
                 )
             )
         )
-        if node.names[0].name == "*":
-            new_imports.append(
-                ast.copy_location(
-                    ast.For(
-                        target=ast.Name(tmp_sub_name, ast.Store()),
-                        iter=ast.Name(tmp_name, ast.Store()),
-                        body=[
-                            ast.copy_location(
-                                ast.Assign(
-                                    targets=[
-                                        ast.Subscript(
-                                            value=ast.Call(
-                                                ast.Name("globals", ast.Load()), [], []
-                                            ),
-                                            slice=ast.Name(tmp_sub_name, ast.Load()),
-                                            ctx=ast.Store(),
-                                        )
-                                    ],
-                                    value=ast.Subscript(
-                                        ast.Name(tmp_name, ast.Load()),
-                                        ast.Name(tmp_sub_name, ast.Load()),
-                                        ast.Load(),
-                                    ),
-                                ),
-                                node,
-                            )
-                        ],
-                        orelse=[],
-                    ),
-                    node,
-                ),
-            )
-            return new_imports
+        
         for alias in node.names:
             glob = self.check(alias.asname or alias.name, False)
             new_imports.append(
@@ -554,8 +452,7 @@ class GlobalReplacer(ast.NodeTransformer):
                             )
                         ],
                         value=ast.Attribute(
-                            ast.Name(tmp_name, ast.Load()),
-                            # name_replacement(self, tmp_name, node, ast.Load()),
+                            ast.Name(tmp_module, ast.Load()),
                             alias.name,
                             ast.Load(),
                         ),
@@ -584,29 +481,30 @@ class GlobalReplacer(ast.NodeTransformer):
 
 
 class Namer:
-    def __init__(self, prefix=None, random_length=4):
-        self.names = {}
+    def __init__(self, prefix=None, keep_name=True, random_length=0):#4):
+        self.taken_names = defaultdict(int)
         self.prefix = prefix or ""
+        self.keep_name = keep_name
         self.random_length = random_length
 
-    def random_string(self):
+    def generate_random_string(self):
         return "".join(
             random.choices(
                 string.ascii_letters + string.digits + "_", k=self.random_length
             )
         )
 
-    def get_unique_name(self, name: str = None):
-        name = name or ""
-        name = re.sub(r"\W", "_", name) + (
-            ("_" + self.random_string()) if self.random_length else ""
-        )
-        self.names[name] = self.names.get(name, 0) + 1
-        return (
-            self.prefix
-            + name
-            + ("_" + str(self.names[name]) if self.names[name] > 1 else "")
-        )
+    def get_unique_name(self, name: str = ""):
+        parts = [self.prefix]
+        if self.keep_name and name:
+            parts.append(re.sub(r"\W", "_", name))
+        if self.random_length:
+            parts.append(self.generate_random_string())
+        new_name = "_".join(parts)
+        self.taken_names[new_name] += 1
+        if self.taken_names[new_name] > 1:
+            new_name += "_" + str(self.taken_names[new_name])
+        return new_name
 
 
 class ComPYner:
@@ -617,7 +515,6 @@ class ComPYner:
         debug_stack=False,
         debug_line=False,
         split_modules=True,
-        use_attr=False,
         pastprocessor=None,
         require_dunder_name=False,
     ):
@@ -628,7 +525,6 @@ class ComPYner:
         self.module_preprocessor = module_preprocessor or (lambda x, y: x)
         self.pastprocessor = pastprocessor or (lambda x: x)
         self.namer = Namer()  # "_CPYD")
-        self.use_attr = use_attr
         self.names = {}
         self.require_dunder_name = require_dunder_name
         self.static = self.namer.get_unique_name()
@@ -637,9 +533,9 @@ class ComPYner:
         self.result_module.body.append(
             ast.ClassDef(
                 name=internals,
-                bases=[ast.Name("dict", ast.Load())] if self.use_attr else [],
+                bases=[ast.Name("dict", ast.Load())],
                 keywords=[],
-                body=[*(INTERNALS_USE_ATTR if self.use_attr else INTERNALS).body],
+                body=[*(MODULE_CLASS_BODY).body],
                 decorator_list=[],
                 lineno=0,
                 col_offset=0,
@@ -647,19 +543,7 @@ class ComPYner:
                 end_col_offset=0,
             )
         )
-        if self.use_attr:
-            self.static = internals
-        else:
-            self.result_module.body.append(
-                ast.Assign(
-                    targets=[ast.Name(self.static, ast.Store())],
-                    value=ast.Call(ast.Name(internals, ast.Load()), [], []),
-                    lineno=0,
-                    col_offset=0,
-                    end_lineno=0,
-                    end_col_offset=0,
-                )
-            )
+        self.static = internals
         self.stack_var = self.namer.get_unique_name()
         self.current_file = "<comPYned>"
         if debug_stack:
@@ -701,18 +585,17 @@ class ComPYner:
         if not spec:
             raise ModuleNotFoundError(f"Module {name} not found")
         if spec.origin == "built-in":
-            warnings.warn(
-                f"Module {name} cannot be included: It is a built-in module. Excluded automatically, make sure it exists in the target environment."
+            logging.warning(
+                "Module %s cannot be included: It is a built-in module. Excluded automatically, make sure it exists in the target environment.",
+                name,
             )
             return False
         if not spec.has_location:
-            warnings.warn(
-                f"Module {name} cannot be included: It does not have a location. Excluded automatically, make sure it exists in the target environment."
+            logging.warning(
+                "Module %s cannot be included: It does not have a location. Excluded automatically, make sure it exists in the target environment.",
+                name,
             )
             return False
-        # print(
-        #     f"Loading module {name} as {spec.name} from {spec.origin}", file=sys.stderr
-        # )
 
         if spec.name in self.current_modules:
             raise RecursionError(
@@ -733,25 +616,26 @@ class ComPYner:
         return spec.name
 
     def add_module(self, name: str, module: ast.Module, parent=None, origin=None):
-        module = self.module_preprocessor(module, origin or name)
-        gf = GlobalFinder()
-        gf.visit(module)
-        print(f"Adding module {name:<25} from {origin}", file=sys.stderr)
-        # print(f"Globals in {name}:", file=sys.stderr)
-        # for glob, target in gf.globals:
-        # print(f"  {'.'.join(target + [glob])}", file=sys.stderr)
-        # if not gf.globals:
-        #     print("   (none)", file=sys.stderr)
-        tmp_self = self.namer.get_unique_name()
-        old_file = self.current_file
-        file_set = self.set_file(origin or name)
-        self.current_file = str(origin or name)
-        tree = GlobalReplacer(self, gf.globals, parent=parent, tmp_self=tmp_self).visit(
-            module
+        # Simplify name
+        simple_name = (
+            Path(origin).relative_to(Path.cwd()).as_posix() if origin else name
         )
+        module = self.module_preprocessor(module, origin or name)
+        gf = DiscoverGlobals()
+        gf.visit(module)
+
+        logging.info("Adding module %s from %s", name, simple_name)
+
+        tmp_self = self.namer.get_unique_name("module_" + name)
+        old_file = self.current_file
+        file_set = self.set_file(simple_name)
+        self.current_file = str(simple_name)
+        tree = TransformGlobals(
+            self, gf.globals, parent=parent, tmp_self=tmp_self
+        ).visit(module)
         self.current_file = old_file
         fname = self.namer.get_unique_name(
-            "main" if name == "__main__" else "module_" + name
+            "load_" + name
         )
         if self.split_modules:
             self.result_module.body.append(
@@ -772,15 +656,7 @@ class ComPYner:
                             ast.Assign(
                                 targets=[ast.Name(tmp_self, ast.Load())],
                                 value=ast.Call(
-                                    func=(
-                                        ast.Name(self.static, ast.Load())
-                                        if self.use_attr
-                                        else ast.Attribute(
-                                            ast.Name(self.static, ast.Load()),
-                                            "Module",
-                                            ast.Load(),
-                                        )
-                                    ),
+                                    func=(ast.Name(self.static, ast.Load())),
                                     args=[],
                                     keywords=[],
                                 ),
@@ -797,14 +673,6 @@ class ComPYner:
                                         ast.Attribute(
                                             value=ast.Name(tmp_self, ast.Load()),
                                             attr="__name__",
-                                            ctx=ast.Store(),
-                                        )
-                                        if self.use_attr
-                                        else ast.Subscript(
-                                            value=ast.Name(tmp_self, ast.Load()),
-                                            slice=ast.Index(
-                                                ast.Constant(value="__name__")
-                                            ),
                                             ctx=ast.Store(),
                                         )
                                     )
@@ -842,49 +710,24 @@ class ComPYner:
                 ),
             )
 
-            if self.use_attr:
-                assign = ast.Assign(
-                    targets=[ast.Name(tmp_self, ast.Load())],
-                    value=ast.Call(
-                        ast.Name(id=fname, ctx=ast.Load()),
-                        [],
-                        [],
-                        lineno=0,
-                        col_offset=0,
-                        end_lineno=0,
-                        end_col_offset=0,
-                    ),
+            assign = ast.Assign(
+                targets=[ast.Name(tmp_self, ast.Load())],
+                value=ast.Call(
+                    ast.Name(id=fname, ctx=ast.Load()),
+                    [],
+                    [],
                     lineno=0,
                     col_offset=0,
                     end_lineno=0,
                     end_col_offset=0,
-                )
-                self.names_for_modules[name] = tmp_self
-            else:
-                assign = ast.Assign(
-                    targets=[
-                        ast.Subscript(
-                            value=ast.Attribute(
-                                ast.Name(self.static, ast.Load()), "modules", ast.Load()
-                            ),
-                            slice=ast.Constant(value=name),
-                            ctx=ast.Store(),
-                        )
-                    ],
-                    value=ast.Call(
-                        ast.Name(id=fname, ctx=ast.Load()),
-                        [],
-                        [],
-                        lineno=0,
-                        col_offset=0,
-                        end_lineno=0,
-                        end_col_offset=0,
-                    ),
-                    lineno=0,
-                    col_offset=0,
-                    end_lineno=0,
-                    end_col_offset=0,
-                )
+                ),
+                lineno=0,
+                col_offset=0,
+                end_lineno=0,
+                end_col_offset=0,
+            )
+            self.names_for_modules[name] = tmp_self
+
         else:
             self.result_module.body.extend(
                 [
@@ -892,15 +735,7 @@ class ComPYner:
                     ast.Assign(
                         targets=[ast.Name(tmp_self, ast.Load())],
                         value=ast.Call(
-                            func=(
-                                ast.Name(self.static, ast.Load())
-                                if self.use_attr
-                                else ast.Attribute(
-                                    ast.Name(self.static, ast.Load()),
-                                    "Module",
-                                    ast.Load(),
-                                )
-                            ),
+                            func=(ast.Name(self.static, ast.Load())),
                             args=[],
                             keywords=[],
                         ),
@@ -918,12 +753,6 @@ class ComPYner:
                                         attr="__name__",
                                         ctx=ast.Store(),
                                     )
-                                    if self.use_attr
-                                    else ast.Subscript(
-                                        value=ast.Name(tmp_self, ast.Load()),
-                                        slice=ast.Index(ast.Constant(value="__name__")),
-                                        ctx=ast.Store(),
-                                    )
                                 ),
                             ],
                             value=ast.Constant(value=name),
@@ -938,26 +767,8 @@ class ComPYner:
                     *tree.body,
                 ]
             )
-            if self.use_attr:
-                assign = None
-                self.names_for_modules[name] = tmp_self
-            else:
-                assign = ast.Assign(
-                    targets=[
-                        ast.Subscript(
-                            value=ast.Attribute(
-                                ast.Name(self.static, ast.Load()), "modules", ast.Load()
-                            ),
-                            slice=ast.Constant(value=name),
-                            ctx=ast.Store(),
-                        )
-                    ],
-                    value=ast.Name(tmp_self, ast.Load()),
-                    lineno=0,
-                    col_offset=0,
-                    end_lineno=0,
-                    end_col_offset=0,
-                )
+            assign = None
+            self.names_for_modules[name] = tmp_self
 
         if not assign:
             return
@@ -1032,8 +843,7 @@ class ComPYner:
         self.result_module.body.append(assign)
 
     def compyne(self):
-        self.result_module.body.extend(END.body)
-        return self.pastprocessor(CustomUnparser().visit(self.result_module))
+        return self.pastprocessor(NoneFriendlyUnparser().visit(self.result_module))
 
 
 class LocationSearcher(ast.NodeVisitor):
