@@ -1,21 +1,30 @@
-[tool.poetry]
+[project]
+authors = [
+    { name = "J0J0HA aka. JoJoJux", email = "johannes@jojojux.de" },
+    { name = "GSG Robots", email = "gsgrobots@gmail.com>" },
+]
 name = "compyner"
-version = "0.0.2"
+version = "0.1.0"
 description = "A small tool to bundle a python file and all its imports into a single file."
-authors = ["GSG Robots <gsgrobots@gmail.com>"]
 readme = "README.md"
+dependencies = ["ast-comments (>=1.2.2,<2.0.0)"]
+requires-python = ">=3.13.1,<4.0"
+
+[project.optional-dependencies]
+spike-prime = [
+    "pyserial (>=3.5,<4.0.0)",
+    "tqdm (>=4.67.1,<5.0.0)",
+    "colorama (>=0.4.6,<0.5.0)",
+    "json-fix (>=1.0.0,<2.0.0)",
+    "dataclasses-json (>=0.6.7,<1.0.0)",
+]
+
+[project.urls]
 repository = "https://github.com/GSG-Robots/compyner"
 
-
-[tool.poetry.dependencies]
-python = "^3.9"
-ast-comments = "^1.2.2"
-
+[project.scripts]
+compyner = "compyner.__main__:main"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
-
-[tool.poetry.scripts]
-compyner = "compyner.__main__:main"

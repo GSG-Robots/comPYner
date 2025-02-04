@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 import re
 import sys
-import logging
+from .logging import logger
 import random
 import string
 
@@ -19,7 +19,7 @@ class NoneFriendlyUnparser(ast._Unparser):
 def name_replacement(
     gr: "TransformGlobals", name: str, original_node: ast.AST, ctx: ast.expr_context
 ) -> ast.Attribute:
-    if name == gr.compyner.static or name == "ComPYnerBuildTools":
+    if name == gr.compyner.module_class_name or name == "ComPYnerBuildTools":
         return ast.copy_location(ast.Name(id=name, ctx=ctx), original_node)
     attr = ast.Attribute(
         value=ast.Name(gr.tmp_self, ast.Load()),
@@ -65,7 +65,7 @@ class ComPYnerBuildTools:
             spec = importlib.util.spec_from_file_location(
                 file.with_suffix("").name, file
             )
-            do = replacer.compyner._load_module(spec, spec.name)
+            do = replacer.compyner.import_module_from_spec(spec, spec.name)
             if do is False:
                 raise ValueError(
                     f"Could not import module {file.relative_to(Path.cwd())} using glob."
@@ -162,7 +162,7 @@ class TransformGlobals(ast.NodeTransformer):
         self,
         compyner: "ComPYner",
         globals_,
-        parent: "TransformGlobals" = None,
+        parent: str = None,
         context=None,
         tmp_self=None,
     ):
@@ -176,7 +176,8 @@ class TransformGlobals(ast.NodeTransformer):
     def set_line(self, line):
         return self.compyner.set_line(line)
 
-    def check(self, name, readonly):
+    def is_name_global(self, name, readonly):
+        # check whether name is a global variable
         name = name.split(".")[0]
         ctx = self.context.copy()
         while ctx and readonly:
@@ -186,20 +187,15 @@ class TransformGlobals(ast.NodeTransformer):
         return (name, ctx) in self.globals
 
     def visit_Name(self, node):
-        if self.check(node.id, readonly=isinstance(node.ctx, ast.Load)):
+        # replace names if global
+        if self.is_name_global(node.id, readonly=isinstance(node.ctx, ast.Load)):
             return name_replacement(self, node.id, node, node.ctx)
 
         return node
 
     def visit_Global(self, node: ast.Global):
+        # remove global keyword
         return ast.Pass()
-
-    def visit_Return(self, node: ast.Return):
-        node.value = self.visit(node.value)
-        return [
-            self.set_line(node.lineno),
-            node,
-        ]
 
     def visit_FunctionDef(self, node):
         sub_replacer = TransformGlobals(
@@ -209,6 +205,7 @@ class TransformGlobals(ast.NodeTransformer):
             self.context + [node.name],
             self.tmp_self,
         )
+        # change name to temp name as args are impossible in func name
         original_name = node.name
         node.name = self.compyner.namer.get_unique_name("func_" + original_name)
         node.body = [sub_replacer.visit(n) for n in node.body]
@@ -218,30 +215,30 @@ class TransformGlobals(ast.NodeTransformer):
         if node.returns is not None:
             node.returns = self.visit(node.returns)
 
-        if self.check(original_name, False):
-            return [
-                self.set_line(node.lineno),
-                node,
-                ast.copy_location(
-                    ast.Assign(
-                        targets=[name_replacement(self, original_name, node, ast.Store())],
-                        value=ast.Name(id=node.name, ctx=ast.Load()),
-                    ),
-                    node,
-                ),
-                # TODO
-                ast.copy_location(
-                    ast.Delete(
-                        [ast.Name(id=node.name, ctx=ast.Del())],
-                    ),
-                    node,
-                ),
-            ]
-        else:
+        if not self.is_name_global(original_name, False):
             return [
                 self.set_line(node.lineno),
                 node,
             ]
+
+        return [
+            self.set_line(node.lineno),
+            node,
+            # reassign and delete temp var
+            ast.copy_location(
+                ast.Assign(
+                    targets=[name_replacement(self, original_name, node, ast.Store())],
+                    value=ast.Name(id=node.name, ctx=ast.Load()),
+                ),
+                node,
+            ),
+            ast.copy_location(
+                ast.Delete(
+                    [ast.Name(id=node.name, ctx=ast.Del())],
+                ),
+                node,
+            ),
+        ]
 
     def visit_ClassDef(self, node: ast.ClassDef):
         sub_replacer = TransformGlobals(
@@ -253,43 +250,41 @@ class TransformGlobals(ast.NodeTransformer):
         )
         node.body = [sub_replacer.visit(n) for n in node.body]
         node.bases = [self.visit(n) for n in node.bases]
+        # change name to temp name as args are impossible in class name
         original_name = node.name
         node.name = self.compyner.namer.get_unique_name("class_" + original_name)
 
-        if self.check(original_name, False):
-            return [
-                self.set_line(node.lineno),
-                node,
-                ast.copy_location(
-                    ast.Assign(
-                        targets=[name_replacement(self, original_name, node, ast.Store())],
-                        value=ast.Name(id=node.name, ctx=ast.Load()),
-                    ),
-                    node,
-                ),
-                # TODO
-                ast.copy_location(
-                    ast.Delete(
-                        [ast.Name(id=node.name, ctx=ast.Del())],
-                    ),
-                    node,
-                ),
-            ]
-        else:
+        if not self.is_name_global(original_name, False):
             return [
                 self.set_line(node.lineno),
                 node,
             ]
+
+        return [
+            self.set_line(node.lineno),
+            node,
+            # reassign and delete temp var
+            ast.copy_location(
+                ast.Assign(
+                    targets=[name_replacement(self, original_name, node, ast.Store())],
+                    value=ast.Name(id=node.name, ctx=ast.Load()),
+                ),
+                node,
+            ),
+            ast.copy_location(
+                ast.Delete(
+                    [ast.Name(id=node.name, ctx=ast.Del())],
+                ),
+                node,
+            ),
+        ]
 
     def visit_Import(self, node: ast.Import):
         new_imports = []
         for alias in node.names:
-            replace_import = self.compyner.load_module(alias.name, self.parent)
-            tmp_name = (
-                self.compyner.names_for_modules.get(alias.name)
-                or self.compyner.namer.get_unique_name("import_" + (alias.asname or alias.name))
-            )
-            glob = self.check(alias.asname or alias.name, False)
+            replace_import, body = self.compyner.import_module(alias.name, self.parent)
+            new_imports.extend(body)
+            glob = self.is_name_global(alias.asname or alias.name, False)
             parts = (alias.asname or alias.name).split(".")
             for part in range(len(parts) - 1):
                 new_imports.append(
@@ -304,7 +299,7 @@ class TransformGlobals(ast.NodeTransformer):
                                 )
                             ],
                             value=ast.Call(
-                                (ast.Name(self.compyner.static, ast.Load())),
+                                (ast.Name(self.compyner.module_class_name, ast.Load())),
                                 [],
                                 [],
                             ),
@@ -343,6 +338,11 @@ class TransformGlobals(ast.NodeTransformer):
                     )
                 )
             else:
+                tmp_name = self.compyner.names_for_modules.get(
+                    alias.name
+                ) or self.compyner.namer.get_unique_name(
+                    "import_" + (alias.asname or alias.name)
+                )
                 new_imports.append(
                     ast.copy_location(
                         ast.Import([ast.alias(alias.name, tmp_name)]), node
@@ -382,6 +382,7 @@ class TransformGlobals(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call):
         node.args = [self.visit(arg) for arg in node.args]
         node.keywords = [self.visit(kwarg) for kwarg in node.keywords]
+        # if func is attr of anything called ComPYnerBuildTools, run it at compile time and replace call with reurn value
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -394,10 +395,13 @@ class TransformGlobals(ast.NodeTransformer):
         return node
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
+        # imports from compyner.typehints are dropped and ignored
         if node.module == "compyner.typehints":
             return ast.Pass()
-        
+
+        # from . import a or from .. import a
         if node.module is None:
+            # import as if: import .a or import ..a
             return self.visit(
                 ast.copy_location(
                     ast.Import(
@@ -412,11 +416,18 @@ class TransformGlobals(ast.NodeTransformer):
                     node,
                 )
             )
-        
+
+        # deny star-import
         if node.names[0].name == "*":
-            raise ValueError("Star imports are not supported, found at " + self.compyner.current_file + ":" + str(node.lineno))
-        
+            raise ValueError(
+                "Star imports are not supported, found at "
+                + self.compyner.current_file
+                + ":"
+                + str(node.lineno)
+            )
+
         new_imports = []
+        # import parent module as tmp_name
         tmp_module = self.compyner.namer.get_unique_name("import_" + node.module)
         new_imports.append(
             self.visit_Import(
@@ -430,9 +441,10 @@ class TransformGlobals(ast.NodeTransformer):
                 )
             )
         )
-        
+
+        # assign each import to the specified asname
         for alias in node.names:
-            glob = self.check(alias.asname or alias.name, False)
+            glob = self.is_name_global(alias.asname or alias.name, False)
             new_imports.append(
                 ast.copy_location(
                     ast.Assign(
@@ -463,6 +475,7 @@ class TransformGlobals(ast.NodeTransformer):
         return new_imports
 
     def visit_If(self, node: ast.If):
+        # if typing.TYPE_CHECKING: is dropped and ignored
         match node.test:
             case ast.Attribute(ast.Name("typing"), "TYPE_CHECKING"):
                 return
@@ -470,8 +483,11 @@ class TransformGlobals(ast.NodeTransformer):
                 return self.generic_visit(node)
 
     def generic_visit(self, node: ast.stmt) -> list[ast.stmt]:
+        # don't care for None
         if node is None:
             return None
+
+        # Add lineno to statements
         if isinstance(node, ast.stmt):
             return [
                 self.set_line(node.lineno),
@@ -481,7 +497,7 @@ class TransformGlobals(ast.NodeTransformer):
 
 
 class Namer:
-    def __init__(self, prefix=None, keep_name=True, random_length=0):#4):
+    def __init__(self, prefix=None, keep_name=True, random_length=0):
         self.taken_names = defaultdict(int)
         self.prefix = prefix or ""
         self.keep_name = keep_name
@@ -510,340 +526,173 @@ class Namer:
 class ComPYner:
     def __init__(
         self,
-        exclude=None,
+        exclude_modules=None,
         module_preprocessor=None,
-        debug_stack=False,
-        debug_line=False,
-        split_modules=True,
         pastprocessor=None,
         require_dunder_name=False,
+        keep_names=True,
+        random_name_length=0,
     ):
-        self.exclude = exclude or []
+        self.exclude_modules = exclude_modules or []
         self.loaded_modules = []
         self.current_modules = []
-        self.result_module = ast.Module([], [])
         self.module_preprocessor = module_preprocessor or (lambda x, y: x)
         self.pastprocessor = pastprocessor or (lambda x: x)
-        self.namer = Namer()  # "_CPYD")
-        self.names = {}
-        self.require_dunder_name = require_dunder_name
-        self.static = self.namer.get_unique_name()
-        internals = self.namer.get_unique_name()
-        self.names_for_modules = {}
-        self.result_module.body.append(
-            ast.ClassDef(
-                name=internals,
-                bases=[ast.Name("dict", ast.Load())],
-                keywords=[],
-                body=[*(MODULE_CLASS_BODY).body],
-                decorator_list=[],
-                lineno=0,
-                col_offset=0,
-                end_lineno=0,
-                end_col_offset=0,
-            )
+        self.namer = Namer(
+            keep_name=keep_names, random_length=random_name_length, prefix="c"
         )
-        self.static = internals
-        self.stack_var = self.namer.get_unique_name()
+        self.require_dunder_name = require_dunder_name
+        self.module_class_name = self.namer.get_unique_name("Module")
+        self.names_for_modules = {}
         self.current_file = "<comPYned>"
-        if debug_stack:
-            self.result_module.body.append(
-                ast.Assign(
-                    targets=[ast.Name(self.stack_var, ast.Store())],
-                    value=ast.List(elts=[], ctx=ast.Load()),
-                    lineno=0,
-                    col_offset=0,
-                    end_lineno=0,
-                    end_col_offset=0,
-                )
-            )
-        self.debug_stack = debug_stack
-        self.debug_line = debug_line and debug_stack
-        self.split_modules = split_modules
 
-    def set_file(self, file):
+    def set_file(self, file: Path | str) -> ast.Comment:
         return ast.Comment(f"##{str(file)}##", inline=False)
 
-    def set_line(self, line):
+    def set_line(self, line: int) -> ast.Comment:
         return ast.Comment(f"##{self.current_file}:{line}##", inline=False)
 
-    def load_module(self, name, parent=None):
-        if name.split(".", 1)[0] in self.exclude:
-            return False
+    def import_module(self, name: str, parent: str = None) -> bool:
+        # If top parent is excluded, do not import module
+        if name.split(".", 1)[0] in self.exclude_modules:
+            return False, []
 
+        # look for polyfill
         try:
             special_spec = importlib.util.find_spec("compyned_polyfills." + name)
             if special_spec:
-                return self._load_module(special_spec, name)
+                return self.import_module_from_spec(special_spec, name)
         except ModuleNotFoundError:
             pass
 
+        # get spec and go from there
         spec = importlib.util.find_spec(name, parent)
-        return self._load_module(spec, name)
+        return self.import_module_from_spec(spec, name)
 
-    def _load_module(self, spec, name=None):
+    def import_module_from_spec(self, spec, name=None) -> tuple[str, list[ast.stmt]]:
+        # spec is None => Module not found
         if not spec:
             raise ModuleNotFoundError(f"Module {name} not found")
+
+        # Warn about builtin modules
         if spec.origin == "built-in":
-            logging.warning(
+            logger.warning(
                 "Module %s cannot be included: It is a built-in module. Excluded automatically, make sure it exists in the target environment.",
                 name,
             )
-            return False
+            return False, []
         if not spec.has_location:
-            logging.warning(
+            logger.warning(
                 "Module %s cannot be included: It does not have a location. Excluded automatically, make sure it exists in the target environment.",
                 name,
             )
-            return False
+            return False, []
 
+        # Error out over recursive import
         if spec.name in self.current_modules:
             raise RecursionError(
                 f"Recursive import detected: {' > '.join(self.current_modules)} >> {spec.name}"
             )
 
+        # if not imported before
         if spec.name not in self.loaded_modules:
+            # build module and return for insertion
             self.current_modules.append(spec.name)
-            self.add_module(
+            body = self.transform_module(
                 spec.name,
                 ast_from_file(Path(spec.origin)),
                 spec.parent,
                 origin=spec.origin,
             )
             self.current_modules.pop()
-        self.loaded_modules.append(spec.name)
+            self.loaded_modules.append(spec.name)
+            return spec.name, body
 
-        return spec.name
+        return spec.name, []
 
-    def add_module(self, name: str, module: ast.Module, parent=None, origin=None):
+    def transform_module(
+        self, name: str, module: ast.Module, parent: str = None, origin: str = None
+    ):
         # Simplify name
-        simple_name = (
-            Path(origin).relative_to(Path.cwd()).as_posix() if origin else name
+        simple_path = (
+            Path(origin).absolute().relative_to(Path.cwd()).as_posix()
+            if origin
+            else name
         )
+        logger.info("Adding %-15s from %s", name, simple_path)
+
         module = self.module_preprocessor(module, origin or name)
+
+        # Discorver globals
         gf = DiscoverGlobals()
         gf.visit(module)
 
-        logging.info("Adding module %s from %s", name, simple_name)
+        module_varname = self.namer.get_unique_name("module_" + name)
 
-        tmp_self = self.namer.get_unique_name("module_" + name)
+        # Transform globals
         old_file = self.current_file
-        file_set = self.set_file(simple_name)
-        self.current_file = str(simple_name)
+        self.current_file = simple_path
         tree = TransformGlobals(
-            self, gf.globals, parent=parent, tmp_self=tmp_self
+            self, gf.globals, parent=parent, tmp_self=module_varname
         ).visit(module)
         self.current_file = old_file
-        fname = self.namer.get_unique_name(
-            "load_" + name
-        )
-        if self.split_modules:
-            self.result_module.body.append(
-                ast.FunctionDef(
-                    name=fname,
-                    args=ast.arguments(
-                        args=[],
-                        vararg=None,
-                        kwonlyargs=[],
-                        posonlyargs=[],
-                        kw_defaults=[],
-                        kwarg=None,
-                        defaults=[],
-                    ),
-                    body=[
-                        file_set,
-                        (
-                            ast.Assign(
-                                targets=[ast.Name(tmp_self, ast.Load())],
-                                value=ast.Call(
-                                    func=(ast.Name(self.static, ast.Load())),
-                                    args=[],
-                                    keywords=[],
-                                ),
-                                lineno=0,
-                                col_offset=0,
-                                end_lineno=0,
-                                end_col_offset=0,
-                            )
-                        ),
-                        (
-                            ast.Assign(
-                                targets=[
-                                    (
-                                        ast.Attribute(
-                                            value=ast.Name(tmp_self, ast.Load()),
-                                            attr="__name__",
-                                            ctx=ast.Store(),
-                                        )
-                                    )
-                                ],
-                                value=ast.Constant(value=name),
-                                lineno=0,
-                                col_offset=0,
-                                end_lineno=0,
-                                end_col_offset=0,
-                            )
-                            if gf.has_dunder_name or self.require_dunder_name
-                            else None
-                        ),
-                        *tree.body,
-                        ast.Return(
-                            value=ast.Name(
-                                tmp_self,
-                                ast.Load(),
-                                lineno=0,
-                                col_offset=0,
-                                end_lineno=0,
-                                end_col_offset=0,
-                            ),
-                            lineno=0,
-                            col_offset=0,
-                            end_lineno=0,
-                            end_col_offset=0,
-                        ),
-                    ],
-                    decorator_list=[],
-                    lineno=0,
-                    col_offset=0,
-                    end_lineno=0,
-                    end_col_offset=0,
-                ),
-            )
 
-            assign = ast.Assign(
-                targets=[ast.Name(tmp_self, ast.Load())],
+        # Store module as already imported for later access
+        self.names_for_modules[name] = module_varname
+
+        # Produce transformed module
+        return [
+            # Set file path for debug
+            self.set_file(simple_path),
+            # Create Module object
+            ast.Assign(
+                targets=[ast.Name(module_varname, ast.Load())],
                 value=ast.Call(
-                    ast.Name(id=fname, ctx=ast.Load()),
-                    [],
-                    [],
-                    lineno=0,
-                    col_offset=0,
-                    end_lineno=0,
-                    end_col_offset=0,
+                    func=(ast.Name(self.module_class_name, ast.Load())),
+                    args=(
+                        [ast.Constant(value=name)]
+                        if gf.has_dunder_name or self.require_dunder_name
+                        else []
+                    ),
+                    keywords=[],
                 ),
                 lineno=0,
                 col_offset=0,
                 end_lineno=0,
                 end_col_offset=0,
-            )
-            self.names_for_modules[name] = tmp_self
+            ),
+            # Module body
+            *tree.body,
+        ]
 
-        else:
-            self.result_module.body.extend(
-                [
-                    file_set,
-                    ast.Assign(
-                        targets=[ast.Name(tmp_self, ast.Load())],
-                        value=ast.Call(
-                            func=(ast.Name(self.static, ast.Load())),
-                            args=[],
+    def compyne_from_ast(
+        self,
+        name: str,
+        module: ast.Module,
+        parent: str = None,
+        origin: str = None,
+    ):
+        return self.pastprocessor(
+            NoneFriendlyUnparser().visit(
+                ast.Module(
+                    [
+                        ast.ClassDef(
+                            name=self.module_class_name,
+                            bases=[ast.Name("dict", ast.Load())],
                             keywords=[],
-                        ),
-                        lineno=0,
-                        col_offset=0,
-                        end_lineno=0,
-                        end_col_offset=0,
-                    ),
-                    (
-                        ast.Assign(
-                            targets=[
-                                (
-                                    ast.Attribute(
-                                        value=ast.Name(tmp_self, ast.Load()),
-                                        attr="__name__",
-                                        ctx=ast.Store(),
-                                    )
-                                ),
-                            ],
-                            value=ast.Constant(value=name),
+                            body=[*(MODULE_CLASS_BODY).body],
+                            decorator_list=[],
                             lineno=0,
                             col_offset=0,
                             end_lineno=0,
                             end_col_offset=0,
-                        )
-                        if gf.has_dunder_name or self.require_dunder_name
-                        else None
-                    ),
-                    *tree.body,
-                ]
-            )
-            assign = None
-            self.names_for_modules[name] = tmp_self
-
-        if not assign:
-            return
-        if name == "__main__" and (self.debug_stack or self.debug_line):
-            error_name = self.namer.get_unique_name()
-            self.result_module.body.append(
-                ast.Try(
-                    body=[assign],
-                    handlers=[
-                        ast.ExceptHandler(
-                            type=ast.Name("Exception", ast.Load()),
-                            name=error_name,
-                            body=[
-                                ast.Expr(
-                                    ast.Call(
-                                        ast.Name("print", ast.Load()),
-                                        [
-                                            # ast.Constant("Error at: "),
-                                            # ast.Subscript(
-                                            #     ast.Name(self.stack_var, ast.Load()),
-                                            #     ast.Index(ast.Constant("file")),
-                                            #     ast.Load(),
-                                            # ),
-                                            # ast.Constant(":"),
-                                            # ast.Subscript(
-                                            #     ast.Name(self.metadata_var, ast.Load()),
-                                            #     ast.Index(ast.Constant("line")),
-                                            #     ast.Load(),
-                                            # ),
-                                            # ast.Subscript(
-                                            #     ast.Name(self.metadata_var, ast.Load()),
-                                            #     ast.Index(ast.Constant("stack")),
-                                            #     ast.Load(),
-                                            # ),
-                                            ast.Name(self.stack_var, ast.Load()),
-                                        ],
-                                        [
-                                            # ast.keyword(
-                                            #     arg="sep", value=ast.Constant("")
-                                            # ),
-                                        ],
-                                        lineno=0,
-                                        col_offset=0,
-                                        end_lineno=0,
-                                        end_col_offset=0,
-                                    ),
-                                    lineno=0,
-                                    col_offset=0,
-                                    end_lineno=0,
-                                    end_col_offset=0,
-                                ),
-                                ast.Raise(
-                                    exc=ast.Name(error_name, ast.Load()),
-                                    cause=None,
-                                    lineno=0,
-                                    col_offset=0,
-                                    end_lineno=0,
-                                    end_col_offset=0,
-                                ),
-                            ],
-                        )
+                        ),
+                        *self.transform_module(name, module, parent, origin),
                     ],
-                    orelse=[],
-                    finalbody=[],
-                    lineno=0,
-                    col_offset=0,
-                    end_lineno=0,
-                    end_col_offset=0,
+                    [],
                 )
             )
-            return
-        self.result_module.body.append(assign)
-
-    def compyne(self):
-        return self.pastprocessor(NoneFriendlyUnparser().visit(self.result_module))
+        )
 
 
 class LocationSearcher(ast.NodeVisitor):

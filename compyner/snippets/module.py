@@ -1,3 +1,8 @@
+def __init__(self, name=None):
+    super().__init__()
+    self["__name__"] = name
+
+
 def __getattr__(self, key):
     return self[key]
 
