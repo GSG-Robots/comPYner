@@ -10,15 +10,6 @@ readme = "README.md"
 dependencies = ["ast-comments (>=1.2.2,<2.0.0)"]
 requires-python = ">=3.13.1,<4.0"
 
-[project.optional-dependencies]
-spike-prime = [
-    "pyserial (>=3.5,<4.0.0)",
-    "tqdm (>=4.67.1,<5.0.0)",
-    "colorama (>=0.4.6,<0.5.0)",
-    "json-fix (>=1.0.0,<2.0.0)",
-    "dataclasses-json (>=0.6.7,<1.0.0)",
-]
-
 [project.urls]
 repository = "https://github.com/GSG-Robots/compyner"
 
