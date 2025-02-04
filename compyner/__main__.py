@@ -1,4 +1,5 @@
 import ast
+import sys
 from argparse import ArgumentParser
 from .logging import logger
 from pathlib import Path
@@ -79,6 +80,7 @@ def main() -> None:
 
     logger.info("ComPYning...")
 
+    sys.path.append(str(args.input.parent))
     content = (
         compyner.compyne_from_ast("__main__", module_ast, origin=args.input.name) + "\n"
     )
