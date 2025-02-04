@@ -1,10 +1,4 @@
-class ComPYnerBuildTools:
+def __glob_import__(glob: str) -> list[dict]:
     """
-    Tools to substitute code at compile time
+    Return all modules whose path matches the given glob.
     """
-
-    @staticmethod
-    def get_modules_path_glob(glob: str, /) -> list[dict]:
-        """
-        Return all modules whose path matches the given glob.
-        """

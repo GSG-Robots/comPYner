@@ -43,15 +43,14 @@ def path_from_module(module: str) -> Path:
 MODULE_CLASS_BODY = ast_from_file(path_from_module("compyner.snippets.module"))
 
 
-class ComPYnerBuildTools:
+class CompileTimeReplacements:
     @staticmethod
-    def get_modules_path_glob(
+    def glob_import(
         replacer: "TransformGlobals", node: ast.Call, /
-    ) -> list[ast.AST]:
-
+    ) -> tuple[list[ast.AST], ast.AST]:
         args = [replacer.visit(arg) for arg in node.args]
         if len(args) != 1:
-            raise ValueError("Import regex takes exaclty one argument", args)
+            raise ValueError("Import regex takes exactly one argument", args)
         if not isinstance(args[0], ast.Constant):
             raise TypeError(
                 "The first argument of import_regex must be a constant.", args[0]
@@ -60,12 +59,14 @@ class ComPYnerBuildTools:
         path = Path(sys.path[-1]).absolute()
         files = [file.absolute() for file in path.glob(glob)]
         names = [file.with_suffix("").name for file in files]
+        prefix = []
         elts = []
         for name, file in zip(names, files):
             spec = importlib.util.spec_from_file_location(
                 file.with_suffix("").name, file
             )
-            do = replacer.compyner.import_module_from_spec(spec, spec.name)
+            do, code = replacer.compyner.import_module_from_spec(spec, spec.name)
+            prefix.extend(code)
             if do is False:
                 raise ValueError(
                     f"Could not import module {file.relative_to(Path.cwd())} using glob."
@@ -77,12 +78,9 @@ class ComPYnerBuildTools:
                 )
             )
 
-        return ast.copy_location(
-            ast.List(
-                elts=elts,
-                ctx=ast.Load(),
-            ),
-            node,
+        return prefix, ast.List(
+            elts=elts,
+            ctx=ast.Load(),
         )
 
 
@@ -217,7 +215,7 @@ class TransformGlobals(ast.NodeTransformer):
                 self.set_line(node.lineno),
                 node,
             ]
-            
+
         # change name to temp name as args are impossible in func name
         original_name = node.name
         node.name = self.compyner.namer.get_unique_name("func_" + original_name)
@@ -257,7 +255,7 @@ class TransformGlobals(ast.NodeTransformer):
                 self.set_line(node.lineno),
                 node,
             ]
-        
+
         # change name to temp name as args are impossible in class name
         original_name = node.name
         node.name = self.compyner.namer.get_unique_name("class_" + original_name)
@@ -381,20 +379,22 @@ class TransformGlobals(ast.NodeTransformer):
             new_imports,
         ]
 
-    def visit_Call(self, node: ast.Call):
-        node.args = [self.visit(arg) for arg in node.args]
-        node.keywords = [self.visit(kwarg) for kwarg in node.keywords]
-        # if func is attr of anything called ComPYnerBuildTools, run it at compile time and replace call with reurn value
-        if (
-            isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "ComPYnerBuildTools"
-        ):
-            return getattr(ComPYnerBuildTools, node.func.attr)(self, node)
+    # def visit_Call(self, node: ast.Call):
+    #     node.args = [self.visit(arg) for arg in node.args]
+    #     node.keywords = [self.visit(kwarg) for kwarg in node.keywords]
+    #     # if func is attr of anything called ComPYnerBuildTools, run it at compile time and replace call with reurn value
+    #     if (
+    #         isinstance(node.func, ast.Attribute)
+    #         and isinstance(node.func.value, ast.Name)
+    #         and node.func.value.id == "ComPYnerBuildTools"
+    #     ):
+    #         node = getattr(ComPYnerBuildTools, node.func.attr)(self, node)
+    #         print(4, ast.unparse(node))
+    #         return node
 
-        node.func = self.visit(node.func)
+    #     node.func = self.visit(node.func)
 
-        return node
+    #     return node
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
         # imports from compyner.typehints are dropped and ignored
@@ -489,11 +489,26 @@ class TransformGlobals(ast.NodeTransformer):
         if node is None:
             return None
 
+        match node:
+            case ast.Assign(
+                value=ast.Call(
+                    func=ast.Name(id="__glob_import__"),
+                    args=[ast.Constant()],
+                )
+            ):
+                prefix, val = CompileTimeReplacements.glob_import(self, node.value)
+                return prefix + [
+                    ast.copy_location(ast.Assign(targets=[self.visit(target) for target in node.targets], value=val), node)
+                ]
+
         # Add lineno to statements
         if isinstance(node, ast.stmt):
+            subnodes = super().generic_visit(node)
+            if isinstance(subnodes, list):
+                return [self.set_line(node.lineno), *subnodes]
             return [
                 self.set_line(node.lineno),
-                super().generic_visit(node),
+                subnodes,
             ]
         return super().generic_visit(node)
 
