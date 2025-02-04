@@ -205,9 +205,6 @@ class TransformGlobals(ast.NodeTransformer):
             self.context + [node.name],
             self.tmp_self,
         )
-        # change name to temp name as args are impossible in func name
-        original_name = node.name
-        node.name = self.compyner.namer.get_unique_name("func_" + original_name)
         node.body = [sub_replacer.visit(n) for n in node.body]
         node.decorator_list = [self.visit(n) for n in node.decorator_list]
         node.args = self.visit(node.args) if node.args else None
@@ -215,11 +212,15 @@ class TransformGlobals(ast.NodeTransformer):
         if node.returns is not None:
             node.returns = self.visit(node.returns)
 
-        if not self.is_name_global(original_name, False):
+        if not self.is_name_global(node.name, False):
             return [
                 self.set_line(node.lineno),
                 node,
             ]
+            
+        # change name to temp name as args are impossible in func name
+        original_name = node.name
+        node.name = self.compyner.namer.get_unique_name("func_" + original_name)
 
         return [
             self.set_line(node.lineno),
@@ -250,15 +251,16 @@ class TransformGlobals(ast.NodeTransformer):
         )
         node.body = [sub_replacer.visit(n) for n in node.body]
         node.bases = [self.visit(n) for n in node.bases]
-        # change name to temp name as args are impossible in class name
-        original_name = node.name
-        node.name = self.compyner.namer.get_unique_name("class_" + original_name)
 
-        if not self.is_name_global(original_name, False):
+        if not self.is_name_global(node.name, False):
             return [
                 self.set_line(node.lineno),
                 node,
             ]
+        
+        # change name to temp name as args are impossible in class name
+        original_name = node.name
+        node.name = self.compyner.namer.get_unique_name("class_" + original_name)
 
         return [
             self.set_line(node.lineno),
