@@ -37,6 +37,7 @@ def main() -> None:
         "input",
         action="store",
         type=file_path_exists,
+        help="Path to input file"
     )
     parser.add_argument(
         "--output",
@@ -45,10 +46,11 @@ def main() -> None:
         action="store",
         type=file_path_valid,
         default=None,
+        help="Output file path. Defaults to input with .cpyd.py suffix"
     )
 
     parser.add_argument(
-        "--exclude", required=False, action="store", type=str, default=None, nargs="+"
+        "--exclude", required=False, action="store", type=str, default=None, nargs="+", help="Space-seperated list of modules not to include in the bundle"
     )
     parser.add_argument(
         "--random-name-length",
@@ -57,11 +59,13 @@ def main() -> None:
         action="store",
         type=int,
         default=0,
+        help="How long the generated random names should be. Use 0 for keeping the original names; use any negative number for incrementing. Default 0."
     )
     parser.add_argument(
         "--reduce-dunder-name",
         required=False,
         action="store_true",
+        help="Whether not to set __name__ if it is not used in the file."
     )
     args = parser.parse_args()
 
