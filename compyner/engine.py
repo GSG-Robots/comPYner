@@ -167,6 +167,7 @@ class TransformGlobals(ast.NodeTransformer):
         super().__init__()
         self.globals = globals_
         self.compyner = compyner
+        self.pulled_from_air_modules = []
         self.parent = parent
         self.context = context or []
         self.tmp_self = tmp_self or "_comPYned_SELF"
@@ -283,17 +284,21 @@ class TransformGlobals(ast.NodeTransformer):
         new_imports = []
         for alias in node.names:
             replace_import, body = self.compyner.import_module(alias.name, self.parent)
+            parts = (alias.asname or alias.name).split(".")
             new_imports.extend(body)
             glob = self.is_name_global(alias.asname or alias.name, False)
-            parts = (alias.asname or alias.name).split(".")
             for part in range(len(parts) - 1):
+                pname = ".".join(parts[: part + 1])
+                if pname in self.pulled_from_air_modules:
+                    continue
+                self.pulled_from_air_modules.append(pname)
                 new_imports.append(
                     ast.copy_location(
                         ast.Assign(
                             targets=[
                                 name_replacement(
                                     self,
-                                    ".".join(parts[: part + 1]),
+                                    pname,
                                     alias,
                                     ast.Store(),
                                 )
@@ -303,7 +308,7 @@ class TransformGlobals(ast.NodeTransformer):
                                 [],
                                 [],
                             ),
-                        ),
+                            ),
                         node,
                     )
                 )
