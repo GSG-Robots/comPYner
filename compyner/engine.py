@@ -42,6 +42,24 @@ def path_from_module(module: str) -> Path:
 
 MODULE_CLASS_BODY = ast_from_file(path_from_module("compyner.snippets.module"))
 
+def pyobj_to_ast(pyobj: int | float | str | tuple | list | dict | set | bool | None) -> ast.AST:
+    if isinstance(pyobj, int | float | str | bool | None):
+        return ast.Constant(pyobj)
+    
+    if isinstance(pyobj, list):
+        return ast.List([pyobj_to_ast(elt) for elt in pyobj], ast.Load())
+    
+    if isinstance(pyobj, dict):
+        return ast.Dict([pyobj_to_ast(key) for key in pyobj.keys()], [pyobj_to_ast(item) for item in pyobj.values()])
+    
+    if isinstance(pyobj, set):
+        return ast.Set([pyobj_to_ast(elt) for elt in pyobj])
+    
+    if isinstance(pyobj, tuple):
+        return ast.Tuple([pyobj_to_ast(elt) for elt in pyobj], ast.Load())
+    
+    raise TypeError("unsupported type", type(pyobj))
+
 
 class CompileTimeReplacements:
     @staticmethod
@@ -82,6 +100,24 @@ class CompileTimeReplacements:
             elts=elts,
             ctx=ast.Load(),
         )
+        
+    @staticmethod
+    def at_compile(
+        replacer: "TransformGlobals", node: ast.FunctionDef, /
+    ) -> ast.AST:
+        
+        node.decorator_list = []
+        
+        code = ast.unparse(ast.Module([
+            node,
+            ast.copy_location(ast.Assign([ast.Name("result", ast.Store())], ast.Call(ast.Name(node.name, ast.Load()), [ast.Constant(replacer.compyner.current_file)], [])), node)
+        ], []))
+        
+        gs = {}
+        
+        exec(code, globals=gs)
+        
+        return pyobj_to_ast(gs.get("result"))
 
 
 class DiscoverGlobals(ast.NodeVisitor):
@@ -196,7 +232,16 @@ class TransformGlobals(ast.NodeTransformer):
         # remove global keyword
         return ast.Pass()
 
-    def visit_FunctionDef(self, node):
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        match node:
+            case ast.FunctionDef(
+                decorator_list=[ast.Name(id="compile")]
+            ):
+                val = CompileTimeReplacements.at_compile(self, node)
+                return [
+                    ast.copy_location(ast.Assign(targets=[self.visit(ast.Name(node.name, ast.Store()))], value=val), node)
+                ]
+        
         sub_replacer = TransformGlobals(
             self.compyner,
             self.globals,

@@ -4,7 +4,7 @@ authors = [
     { name = "GSG Robots", email = "gsgrobots@gmail.com>" },
 ]
 name = "compyner"
-version = "0.2.5"
+version = "0.3.0"
 description = "A small tool to bundle a python file and all its imports into a single file."
 readme = "README.md"
 dependencies = ["ast-comments (>=1.2.2,<2.0.0)"]
