@@ -284,6 +284,9 @@ class TransformGlobals(ast.NodeTransformer):
                 node,
             ),
         ]
+    
+    def visit_TypeAlias(self, node: ast.TypeAlias):
+        return ast.Pass()
 
     def visit_ClassDef(self, node: ast.ClassDef):
         sub_replacer = TransformGlobals(
@@ -293,6 +296,7 @@ class TransformGlobals(ast.NodeTransformer):
             self.context + [node.name],
             self.tmp_self,
         )
+        node.type_params = []
         node.body = [sub_replacer.visit(n) for n in node.body]
         node.bases = [self.visit(n) for n in node.bases]
 
