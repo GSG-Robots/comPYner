@@ -4,6 +4,8 @@ ComPYner is a small tool to bundle a python file and all its imports into a sing
 This was created due to the limitations of the micropython implementation on the spike prime, where there is no filesystem to store multiple files.
 We are aware that there are better ways to implement what we have done, but this is the least ugly code that will run on spike primes micropython.
 
+More about why we built compyner and how it works can be found here (German): [bookstack.gsg-robots.de](https://bookstack.gsg-robots.de/books/programmierung/page/compyner)
+
 ## Installation
 
 Install `compyner` with pip, or another tool using PyPI:
